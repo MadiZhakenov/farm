@@ -1,0 +1,11 @@
+{
+  "display_mode": "split",
+  "split_ratio": 0.5,
+  "divider_width": 4,
+  "feather": 3,
+  "h_min": 35,
+  "h_max": 85,
+  "s_min": 80,
+  "v_min": 80,
+  "morph_size": 5
+}

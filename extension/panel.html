@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Farm Flow</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #12150f;
+      --panel: #1a1f16;
+      --card: #22281c;
+      --input: #2a3122;
+      --border: rgba(196, 214, 160, 0.14);
+      --text: #eef2e4;
+      --muted: #9aa68a;
+      --accent: #b8d46a;
+      --accent-dim: rgba(184, 212, 106, 0.18);
+      --ok: #6fcf97;
+      --err: #e57373;
+      --stop: #d97757;
+      --font: "DM Sans", system-ui, sans-serif;
+      --mono: "JetBrains Mono", ui-monospace, monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background:
+        radial-gradient(ellipse 80% 50% at 10% -10%, rgba(184, 212, 106, 0.12), transparent),
+        var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 13px;
+      line-height: 1.45;
+      padding: 14px;
+      min-height: 100vh;
+    }
+
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 4px; }
+
+    .wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .brand h1 {
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--accent);
+    }
+
+    .brand p {
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-top: 2px;
+    }
+
+    .badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(0,0,0,0.2);
+      color: var(--muted);
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--muted);
+    }
+    .dot.ok { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+    .dot.run {
+      background: var(--accent);
+      box-shadow: 0 0 8px var(--accent);
+      animation: pulse 1.4s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .card-h {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--accent);
+    }
+
+    .chip {
+      background: var(--accent-dim);
+      color: var(--accent);
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 10px;
+      font-weight: 700;
+      font-family: var(--mono);
+    }
+
+    label {
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: 500;
+    }
+
+    textarea,     select, input[type="number"] {
+      width: 100%;
+      background: var(--input);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 13px;
+      padding: 10px;
+      outline: none;
+    }
+
+    textarea {
+      min-height: 110px;
+      resize: vertical;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    textarea:focus, select:focus, input[type="number"]:focus {
+      border-color: rgba(184, 212, 106, 0.5);
+    }
+
+    input[type="number"] {
+      -moz-appearance: textfield;
+      font-variant-numeric: tabular-nums;
+    }
+    input[type="number"]::-webkit-outer-spin-button,
+    input[type="number"]::-webkit-inner-spin-button {
+      opacity: 1;
+    }
+
+    select {
+      appearance: none;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%239aa68a' stroke-width='2'><polyline points='6 9 12 15 18 9'/></svg>");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      padding-right: 32px;
+      cursor: pointer;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .field { display: flex; flex-direction: column; gap: 5px; }
+
+    .drop {
+      border: 1.5px dashed rgba(184, 212, 106, 0.35);
+      border-radius: 10px;
+      padding: 18px 12px;
+      text-align: center;
+      cursor: pointer;
+      color: var(--muted);
+      transition: border-color 0.15s, background 0.15s;
+      position: relative;
+    }
+    .drop:hover, .drop.over {
+      border-color: var(--accent);
+      background: var(--accent-dim);
+      color: var(--text);
+    }
+    .drop input {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+    }
+    .drop strong { display: block; color: var(--text); margin-bottom: 4px; font-size: 13px; }
+    .drop span { font-size: 11px; }
+
+    .preview-wrap { display: none; position: relative; }
+    .preview-wrap.show { display: block; }
+    .preview-wrap img {
+      width: 100%;
+      max-height: 140px;
+      object-fit: contain;
+      border-radius: 8px;
+      background: #0d100b;
+      border: 1px solid var(--border);
+    }
+    .preview-wrap button {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      border: none;
+      background: rgba(0,0,0,0.7);
+      color: #fff;
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+    .stat {
+      text-align: center;
+      background: rgba(0,0,0,0.2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px;
+    }
+    .stat b {
+      display: block;
+      font-size: 16px;
+      font-variant-numeric: tabular-nums;
+      font-family: var(--mono);
+    }
+    .stat.q b { color: var(--accent); }
+    .stat.c b { color: var(--ok); }
+    .stat.f b { color: var(--err); }
+    .stat small { color: var(--muted); font-size: 9px; text-transform: uppercase; }
+
+    .primary {
+      width: 100%;
+      border: none;
+      border-radius: 10px;
+      padding: 13px;
+      font-family: var(--font);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      color: #12150f;
+      background: linear-gradient(135deg, #c9e078, #9bbb4a);
+    }
+    .primary.stop {
+      color: #fff;
+      background: linear-gradient(135deg, #e0896a, #c45a3a);
+    }
+    .primary:hover { filter: brightness(1.05); }
+
+    .logs {
+      font-family: var(--mono);
+      font-size: 10.5px;
+      line-height: 1.4;
+      min-height: 200px;
+      max-height: 380px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: var(--muted);
+      background: var(--input);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      margin: 0;
+    }
+    .logs .log-ok { color: var(--ok); }
+    .logs .log-err { color: var(--err); }
+    .logs .log-info { color: var(--text); }
+    .logs .log-dbg { color: #8a9aaa; }
+    .log-meta {
+      font-size: 10px;
+      color: var(--muted);
+      margin: 0 0 6px;
+    }
+
+    .foot { display: flex; justify-content: flex-end; gap: 8px; }
+    .btn-row { display: flex; gap: 8px; }
+    .btn-row .primary { flex: 1; }
+    .ghost.wide {
+      width: 100%;
+      padding: 10px;
+      border-radius: 8px;
+    }
+    .primary.stop { background: var(--stop); color: #1a120e; }
+    .ghost {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 11px;
+      cursor: pointer;
+      font-family: var(--font);
+    }
+    .ghost:hover { color: var(--text); border-color: rgba(255,255,255,0.25); }
+
+    .hint {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="brand">
+        <h1>Farm Flow</h1>
+        <p>Google Flow · images</p>
+      </div>
+      <div class="badge">
+        <span class="dot" id="status-dot"></span>
+        <span id="status-text">…</span>
+      </div>
+    </header>
+
+    <div class="card">
+      <div class="card-h">
+        <span>Prompt queue</span>
+        <span class="chip" id="prompt-badge">0</span>
+      </div>
+        <textarea id="prompts-input" placeholder="One prompt. Use a blank line between prompts if you have several.&#10;&#10;Prompt A line 1&#10;Prompt A line 2&#10;&#10;Prompt B" spellcheck="false"></textarea>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><span>Reference image</span></div>
+      <label class="drop" id="drop-zone">
+        <input type="file" id="ref-input" accept="image/*" />
+        <strong>Drop or click to upload</strong>
+        <span>Used for every prompt in the queue</span>
+      </label>
+      <div class="preview-wrap" id="preview-wrap">
+        <img id="ref-preview" alt="Reference" />
+        <button type="button" id="clear-ref">Remove</button>
+      </div>
+      <p class="hint">Start probes settings UI (🍌 popover or Agent panel — adapts to window size), pastes prompt, waits for Quantity tiles, downloads as FarmFlow/prompt-01_01.png… Pause keeps the queue.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><span>Parameters</span></div>
+      <div class="grid">
+        <div class="field">
+          <label for="aspect-ratio">Aspect</label>
+          <select id="aspect-ratio">
+            <option value="16:9">16:9</option>
+            <option value="4:3">4:3</option>
+            <option value="1:1" selected>1:1</option>
+            <option value="3:4">3:4</option>
+            <option value="9:16">9:16</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="batch-size">Quantity</label>
+          <select id="batch-size">
+            <option value="1x" selected>x1</option>
+            <option value="x2">x2</option>
+            <option value="x3">x3</option>
+            <option value="x4">x4</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="model">Model</label>
+          <select id="model">
+            <option value="Nano Banana Pro">Nano Banana Pro</option>
+            <option value="Nano Banana 2" selected>Nano Banana 2</option>
+            <option value="Imagen 4">Imagen 4</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="iterations">Iterations</label>
+          <input type="number" id="iterations" min="1" max="999" step="1" value="1" title="How many times to run each prompt" />
+        </div>
+        <div class="field">
+          <label for="rest-delay">Rest</label>
+          <select id="rest-delay">
+            <option value="5" selected>5s</option>
+            <option value="10">10s</option>
+            <option value="15">15s</option>
+            <option value="20">20s</option>
+            <option value="30">30s</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat q"><b id="stats-queued">0</b><small>Queued</small></div>
+      <div class="stat c"><b id="stats-completed">0</b><small>Done</small></div>
+      <div class="stat f"><b id="stats-failed">0</b><small>Failed</small></div>
+    </div>
+
+    <div class="btn-row">
+      <button type="button" class="primary" id="toggle-btn">Start</button>
+      <button type="button" class="ghost wide" id="stop-btn" style="display:none">Stop</button>
+    </div>
+    <button type="button" class="ghost wide" id="apply-settings-btn" style="margin-top:8px;width:100%">Apply settings only</button>
+
+    <div class="card">
+      <div class="card-h">
+        <span>Activity log</span>
+        <button type="button" class="ghost" id="clear-logs-btn" style="padding:2px 8px;">Clear</button>
+      </div>
+      <p class="log-meta" id="log-meta">Clicks, probes, uploads, waits — full trace for debugging</p>
+      <div class="logs" id="logs" aria-live="polite"></div>
+    </div>
+
+    <div class="foot">
+      <button type="button" class="ghost" id="scan-ui-btn">Scan UI</button>
+      <button type="button" class="ghost" id="reset-btn">Reset</button>
+    </div>
+  </div>
+  <script src="panel.js"></script>
+</body>
+</html>

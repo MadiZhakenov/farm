@@ -1,0 +1,427 @@
+{
+  "meta": {
+    "version": "1.0.0",
+    "platforms": ["tiktok_photo_mode", "instagram_carousel"],
+    "notes": [
+      "Benchmarks are synthesized from creator-platform analyses (Reelbase, Sydium/Sprout Social citations, Slidy, Contents Pilot, UseVisuals via Creatorflow), Mosseri ranking statements, and JM text-overlay research (Farace et al. 2025; TIR studies).",
+      "Treat ranges as operating bands, not universal constants. Optimize against your own Saves/1k reach and Completion."
+    ],
+    "global_constraints": {
+      "slide_count_sweet_spot_completion": { "min": 5, "max": 8 },
+      "slide_count_sweet_spot_saves_education": { "min": 7, "max": 10 },
+      "tiktok_practical_max_before_completion_collapse": 8,
+      "instagram_hard_max": 20,
+      "tiktok_photo_hard_max": 35,
+      "words": {
+        "hook_slide_1": { "min": 6, "max": 12 },
+        "body_headline": { "min": 4, "max": 8 },
+        "body_total_per_slide": { "min": 10, "max": 15 },
+        "cta_final": { "min": 5, "max": 8 }
+      },
+      "text_image_ratio_pct": {
+        "hook_optimal": { "min": 11, "max": 24 },
+        "education_ceiling": 30,
+        "engagement_collapse_above": 44
+      },
+      "targets": {
+        "swipe_through_rate_pct": 65,
+        "completion_rate_pct": 55,
+        "save_rate_excellent_pct": 5,
+        "share_send_rate_excellent_pct": 3
+      },
+      "algorithm_priority": {
+        "instagram_unconnected_reach": ["sends_per_reach", "watch_time_proxy_swipes", "likes_per_reach"],
+        "instagram_carousel_distribution": ["saves", "sends", "completion"],
+        "tiktok_photo_mode": ["saves", "shares", "dwell_per_slide", "manual_swipes", "comments_per_impression"]
+      }
+    }
+  },
+  "skeletons": [
+    {
+      "id": "listicle_save_bait",
+      "name": "Listicle / Reference Dump",
+      "description": "Numbered utility list optimized for Saves. Dense reference value; each body slide = one stealable item.",
+      "slide_count": { "min": 6, "max": 10 },
+      "target_metric": "saves",
+      "native_ad_slot": {
+        "slide": 5,
+        "mechanic": "bridge_as_tool",
+        "rule": "After 3–4 free high-value items, insert product as 'the tool that compresses steps 1–4' — never as first payoff."
+      },
+      "slides": [
+        {
+          "slide_number": 1,
+          "role": "Hook",
+          "max_words": 12,
+          "purpose": "Numbered promise + audience identity; force swipe to collect items.",
+          "trigger_example": "7 desk setups that quietly 2x focus"
+        },
+        {
+          "slide_number": 2,
+          "role": "Body/Pain",
+          "max_words": 15,
+          "purpose": "Second cover / re-serve slide: name the costly mistake or missing piece.",
+          "trigger_example": "Most people optimize apps. Wrong layer."
+        },
+        {
+          "slide_number": 3,
+          "role": "Body/Pain",
+          "max_words": 15,
+          "purpose": "Item #1 — concrete, screenshotable.",
+          "trigger_example": "1. One warm lamp only. Kill overhead."
+        },
+        {
+          "slide_number": 4,
+          "role": "Body/Pain",
+          "max_words": 15,
+          "purpose": "Item #2 — mid-deck value bomb to lock completion.",
+          "trigger_example": "2. Phone in another room until noon."
+        },
+        {
+          "slide_number": 5,
+          "role": "Ad/Product Slot",
+          "max_words": 15,
+          "purpose": "Bridge: product as acceleration of prior items, not interruption.",
+          "trigger_example": "3. Template pack that sequences 1–2 for you"
+        },
+        {
+          "slide_number": 6,
+          "role": "Resolution",
+          "max_words": 15,
+          "purpose": "Remaining best items / recap cluster.",
+          "trigger_example": "4–6. Noise, scent, 25-min blocks"
+        },
+        {
+          "slide_number": 7,
+          "role": "CTA",
+          "max_words": 8,
+          "purpose": "Save trigger with future-use moment named.",
+          "trigger_example": "Save for your next desk reset"
+        }
+      ]
+    },
+    {
+      "id": "mistake_myth_bust",
+      "name": "Mistake / Myth Bust",
+      "description": "Error→correction arc. High CTR on hook via named failure; Shares when the correction is counterintuitive.",
+      "slide_count": { "min": 5, "max": 8 },
+      "target_metric": "shares",
+      "native_ad_slot": {
+        "slide": 4,
+        "mechanic": "correction_requires_tool",
+        "rule": "After myth is destroyed, product appears as the 'correct protocol', not a sponsor logo dump."
+      },
+      "slides": [
+        {
+          "slide_number": 1,
+          "role": "Hook",
+          "max_words": 12,
+          "purpose": "Name the expensive mistake the audience already makes.",
+          "trigger_example": "Stop posting Reels first. You're burning reach."
+        },
+        {
+          "slide_number": 2,
+          "role": "Body/Pain",
+          "max_words": 15,
+          "purpose": "Prove the cost of the mistake with a specific outcome.",
+          "trigger_example": "Same account. Reels-first = 11% save rate."
+        },
+        {
+          "slide_number": 3,
+          "role": "Bridge/Transition",
+          "max_words": 15,
+          "purpose": "Reveal the counterintuitive mechanism.",
+          "trigger_example": "Carousels train Saves. Saves unlock distribution."
+        },
+        {
+          "slide_number": 4,
+          "role": "Ad/Product Slot",
+          "max_words": 15,
+          "purpose": "Product = implementation of the corrected system.",
+          "trigger_example": "We packaged the 7-slide system here"
+        },
+        {
+          "slide_number": 5,
+          "role": "Resolution",
+          "max_words": 15,
+          "purpose": "Show corrected sequence / proof.",
+          "trigger_example": "Carousel → Save spike → then Reel amplification"
+        },
+        {
+          "slide_number": 6,
+          "role": "CTA",
+          "max_words": 8,
+          "purpose": "Share/send trigger for unconnected reach.",
+          "trigger_example": "Send to a creator stuck under 1k"
+        }
+      ]
+    },
+    {
+      "id": "before_after_transformation",
+      "name": "Before / After Transformation",
+      "description": "Visual gap on slide 1, withheld after until mid/late. Highest completion among story arcs when after is delayed.",
+      "slide_count": { "min": 5, "max": 7 },
+      "target_metric": "ctr",
+      "native_ad_slot": {
+        "slide": 4,
+        "mechanic": "method_reveal",
+        "rule": "Product sits between 'before pain' and 'after reveal' as the method, then after image pays off."
+      },
+      "slides": [
+        {
+          "slide_number": 1,
+          "role": "Hook",
+          "max_words": 10,
+          "purpose": "Before image dominant; text opens incomplete transformation.",
+          "trigger_example": "Same room. 14 days. Not a renovation."
+        },
+        {
+          "slide_number": 2,
+          "role": "Body/Pain",
+          "max_words": 15,
+          "purpose": "Diagnose why before looked dead.",
+          "trigger_example": "Overhead light + clutter = visual noise"
+        },
+        {
+          "slide_number": 3,
+          "role": "Bridge/Transition",
+          "max_words": 15,
+          "purpose": "Constraint / rules of the change.",
+          "trigger_example": "Budget under $40. Three objects only."
+        },
+        {
+          "slide_number": 4,
+          "role": "Ad/Product Slot",
+          "max_words": 15,
+          "purpose": "Product as the kit / checklist used.",
+          "trigger_example": "Used this exact lighting kit list"
+        },
+        {
+          "slide_number": 5,
+          "role": "Resolution",
+          "max_words": 12,
+          "purpose": "After image payoff — must feel earned.",
+          "trigger_example": "After: warm lamp, empty desk, depth"
+        },
+        {
+          "slide_number": 6,
+          "role": "CTA",
+          "max_words": 8,
+          "purpose": "Save the method for next room reset.",
+          "trigger_example": "Save before your next rearrange"
+        }
+      ]
+    },
+    {
+      "id": "story_burnout_arc",
+      "name": "Personal Burnout / Confession Arc",
+      "description": "Identity + vulnerability hook → escalating stakes → lesson → soft product. Strong comments; Shares when lesson is transferable.",
+      "slide_count": { "min": 6, "max": 8 },
+      "target_metric": "shares",
+      "native_ad_slot": {
+        "slide": 5,
+        "mechanic": "lesson_artifact",
+        "rule": "Product is the artifact born from the burnout lesson (template, course, tool), introduced after emotional peak."
+      },
+      "slides": [
+        {
+          "slide_number": 1,
+          "role": "Hook",
+          "max_words": 12,
+          "purpose": "Specific confession with a number.",
+          "trigger_example": "I posted daily for 11 months. Grew 40 followers."
+        },
+        {
+          "slide_number": 2,
+          "role": "Body/Pain",
+          "max_words": 15,
+          "purpose": "Escalate cost (time, money, identity).",
+          "trigger_example": "Deleted 200 drafts. Kept blaming the algorithm."
+        },
+        {
+          "slide_number": 3,
+          "role": "Body/Pain",
+          "max_words": 15,
+          "purpose": "False solution tried.",
+          "trigger_example": "Bought 3 courses. Still guessing hooks."
+        },
+        {
+          "slide_number": 4,
+          "role": "Bridge/Transition",
+          "max_words": 15,
+          "purpose": "Turning insight — one rule change.",
+          "trigger_example": "I stopped filming. Started swipe systems."
+        },
+        {
+          "slide_number": 5,
+          "role": "Ad/Product Slot",
+          "max_words": 15,
+          "purpose": "Product = crystallized system from the lesson.",
+          "trigger_example": "Built the swipe system into a pack"
+        },
+        {
+          "slide_number": 6,
+          "role": "Resolution",
+          "max_words": 15,
+          "purpose": "Outcome metric after change.",
+          "trigger_example": "90 days later: 4.8% save rate baseline"
+        },
+        {
+          "slide_number": 7,
+          "role": "CTA",
+          "max_words": 8,
+          "purpose": "Send to someone in the same loop.",
+          "trigger_example": "Send to a burned-out creator"
+        }
+      ]
+    },
+    {
+      "id": "framework_os",
+      "name": "Framework / Operating System",
+      "description": "Named system (3–5 steps). Highest Save density when framework is proprietary-feeling and screenshotable.",
+      "slide_count": { "min": 7, "max": 10 },
+      "target_metric": "saves",
+      "native_ad_slot": {
+        "slide": 6,
+        "mechanic": "step_zero_or_accelerator",
+        "rule": "Insert product as Step 0 (setup) or as the accelerator between Step 3 and 4 after core free steps are delivered."
+      },
+      "slides": [
+        {
+          "slide_number": 1,
+          "role": "Hook",
+          "max_words": 12,
+          "purpose": "Name the OS + promised outcome.",
+          "trigger_example": "The 4-layer carousel OS I use weekly"
+        },
+        {
+          "slide_number": 2,
+          "role": "Body/Pain",
+          "max_words": 15,
+          "purpose": "Why random tips fail without a system.",
+          "trigger_example": "Tips without order = content debt"
+        },
+        {
+          "slide_number": 3,
+          "role": "Body/Pain",
+          "max_words": 15,
+          "purpose": "Layer/Step 1.",
+          "trigger_example": "Layer 1: Hook debt — write 20 first"
+        },
+        {
+          "slide_number": 4,
+          "role": "Body/Pain",
+          "max_words": 15,
+          "purpose": "Layer/Step 2.",
+          "trigger_example": "Layer 2: One idea per slide only"
+        },
+        {
+          "slide_number": 5,
+          "role": "Bridge/Transition",
+          "max_words": 15,
+          "purpose": "Layer/Step 3 — hardest free step.",
+          "trigger_example": "Layer 3: Mid-deck value bomb (slide 4)"
+        },
+        {
+          "slide_number": 6,
+          "role": "Ad/Product Slot",
+          "max_words": 15,
+          "purpose": "Product accelerates Layers 1–3.",
+          "trigger_example": "Templates = Layer 1–3 prefilled"
+        },
+        {
+          "slide_number": 7,
+          "role": "Resolution",
+          "max_words": 15,
+          "purpose": "Layer/Step 4 + how pieces lock.",
+          "trigger_example": "Layer 4: CTA names the future moment"
+        },
+        {
+          "slide_number": 8,
+          "role": "CTA",
+          "max_words": 8,
+          "purpose": "Save-as-reference CTA.",
+          "trigger_example": "Save this OS. Run it Monday."
+        }
+      ]
+    }
+  ],
+  "hook_formulas": [
+    {
+      "id": "error_disappointment",
+      "name": "Error / Disappointment",
+      "pattern": "Stop/Quit + common practice + costly outcome",
+      "examples": [
+        "Stop posting daily. It's why you stay stuck.",
+        "I wasted $2,400 on ads before fixing this slide."
+      ]
+    },
+    {
+      "id": "paradox_counterintuitive",
+      "name": "Paradox / Counterintuitive",
+      "pattern": "Common belief → inverted rule + specificity",
+      "examples": [
+        "Post less. Get more saves. Here's the math.",
+        "Ugly carousels outperform pretty ones (if dense)."
+      ]
+    },
+    {
+      "id": "checklist_number",
+      "name": "Checklist / Numbered Promise",
+      "pattern": "N items + identity + outcome",
+      "examples": [
+        "9 hooks that beat a $500 Reel edit",
+        "5 desk rules that cut decision fatigue"
+      ]
+    },
+    {
+      "id": "burnout_confession",
+      "name": "Burnout / Personal Confession",
+      "pattern": "I + duration + humiliating metric",
+      "examples": [
+        "11 months of daily posts. +40 followers.",
+        "I almost quit after 0 saves on my best tip."
+      ]
+    },
+    {
+      "id": "incomplete_reveal",
+      "name": "Incomplete Reveal / Withheld Payoff",
+      "pattern": "Before / claim without the after on slide 1",
+      "examples": [
+        "Same desk. One change. Saves tripled.",
+        "Read to slide 5. The last rule is the unlock."
+      ]
+    }
+  ],
+  "triggers": {
+    "saves": [
+      "Save this for [future moment]",
+      "Screenshot slide N",
+      "You'll need this when [scenario]",
+      "Reference / checklist / template language",
+      "I'll delete in 24h (scarcity on reference)"
+    ],
+    "shares_sends": [
+      "Send this to someone who [identity]",
+      "Tag a creator stuck at [metric]",
+      "Forward to your [role] friend",
+      "Quotable counterintuitive one-liner on its own slide",
+      "Debate bait: unpopular but specific rule"
+    ]
+  },
+  "stop_words": [
+    "amazing",
+    "must-see",
+    "viral",
+    "game-changer",
+    "tips and tricks",
+    "you won't believe",
+    "link in bio (on slide 1)",
+    "follow for more (as only CTA)",
+    "let's dive in",
+    "without further ado",
+    "in this carousel",
+    "swipe to learn",
+    "motivational fluff without a number"
+  ]
+}

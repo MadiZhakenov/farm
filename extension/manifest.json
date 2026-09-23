@@ -1,0 +1,43 @@
+{
+  "manifest_version": 3,
+  "name": "Farm Flow",
+  "version": "1.8.1",
+  "description": "Bulk image generation for Google Flow — {gen}_wN_NN; no Back after Agent Save.",
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "sidePanel",
+    "activeTab",
+    "scripting",
+    "debugger",
+    "downloads",
+    "clipboardWrite"
+  ],
+  "host_permissions": [
+    "*://labs.google/*",
+    "*://flow.google.com/*",
+    "*://flow-content.google/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Open Farm Flow"
+  },
+  "side_panel": {
+    "default_path": "panel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://labs.google/*",
+        "*://flow.google.com/*"
+      ],
+      "js": [
+        "flow-ui.js",
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

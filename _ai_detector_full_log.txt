@@ -1,0 +1,108 @@
+Pinterest AI Detector — подготовка выборки…
+  пул кандидатов: 14 (inbox=0, seeds+search → pool=14)
+  analyze 340936634317338069 …
+    → AI  dmst=11  label=True
+  analyze 158259374379943925 …
+    → ok  dmst=None  label=False
+  analyze 9922061675589894 …
+    → ok  dmst=None  label=False
+  analyze 26388347813800004 …
+    → ok  dmst=None  label=False
+  analyze 260505159692582028 …
+    → ok  dmst=None  label=False
+  analyze 899664463056209065 …
+    → ok  dmst=None  label=False
+  analyze 34832597116688634 …
+    → ok  dmst=None  label=False
+  analyze 151855818681651786 …
+    → ok  dmst=None  label=False
+
+==============================================================================
+  Pinterest AI Detector — реверс меток GenAI
+==============================================================================
+  Источник pin_id : inbox=0, seeds+search → pool=14
+  Проверено       : 8
+  С меткой ИИ     : 1
+
+  ТАБЛИЦА
+  --------------------------------------------------------------------------
+  PIN ID                 AI?    Ключ / селектор
+  ---------------------- ------ --------------------------------------------
+  340936634317338069     ДА     digitalMediaSourceType == 11  |  [data-test-id="ai-generated-label"]
+  158259374379943925     нет    digitalMediaSourceType=None, genAiTopics=None
+  9922061675589894       нет    digitalMediaSourceType=None, genAiTopics=None
+  26388347813800004      нет    digitalMediaSourceType=None, genAiTopics=None
+  260505159692582028     нет    digitalMediaSourceType=None, genAiTopics=None
+  899664463056209065     нет    digitalMediaSourceType=None, genAiTopics=None
+  34832597116688634      нет    digitalMediaSourceType=None, genAiTopics=None
+  151855818681651786     нет    digitalMediaSourceType=None, genAiTopics=None
+
+  ДЕТАЛИ ПО СИГНАЛАМ
+  --------------------------------------------------------------------------
+  · 340936634317338069  og=True  status=200
+      digitalMediaSourceType=11  genAiTopics=[{"interestIdStr": "903733943146", "name": "children's fashion", "__t…
+      signals: digitalMediaSourceType=11, genAiTopics=[...], [data-test-id="ai-generated-label"], text:"AI modified"
+      DOM: [data-test-id="ai-generated-label"]  text='AI modified'  data={'data-test-id': 'ai-generated-label'}
+      JSON: genAiTopics = [{"interestIdStr": "903733943146", "name": "children's fashion", "__typename": "GenAIInterestData"}]  ($.pin.genAiTopics)
+      JSON: digitalMediaSourceType = 11  ($.pin.digitalMediaSourceType)
+  · 158259374379943925  og=True  status=200
+      digitalMediaSourceType=None  genAiTopics=None
+  · 9922061675589894  og=True  status=200
+      digitalMediaSourceType=None  genAiTopics=None
+  · 26388347813800004  og=True  status=200
+      digitalMediaSourceType=None  genAiTopics=None
+  · 260505159692582028  og=True  status=200
+      digitalMediaSourceType=None  genAiTopics=None
+  · 899664463056209065  og=True  status=200
+      digitalMediaSourceType=None  genAiTopics=None
+  · 34832597116688634  og=True  status=200
+      digitalMediaSourceType=None  genAiTopics=None
+  · 151855818681651786  og=True  status=200
+      digitalMediaSourceType=None  genAiTopics=None
+
+  ВЫВОД РЕВЕРСА
+  --------------------------------------------------------------------------
+  Надёжный маркер ИИ: digitalMediaSourceType == 11
+  Доп. маркер:        genAiTopics — непустой массив GenAIInterestData
+  DOM-бейдж:          [data-test-id="ai-generated-label"]  (текст «AI modified»)
+  Хрупко:             хеш-классы (ADXRXN, BVzdUh…) — не использовать в проде
+
+  ГОТОВЫЕ ПРОВЕРКИ ДЛЯ AdsPower / парсера
+  --------------------------------------------------------------------
+
+  # Python (httpx + JSON/HTML пина или карточки в ленте)
+  import re
+
+  def is_pinterest_ai_pin(html_or_json: str) -> bool:
+      if 'data-test-id="ai-generated-label"' in html_or_json:
+          return True
+      if re.search(r'"digitalMediaSourceType"\s*:\s*11\b', html_or_json):
+          return True
+      if re.search(r'"genAiTopics"\s*:\s*\[\s*\{', html_or_json):
+          return True
+      return False
+  # True  → скипать пин (AI)
+  # False → оставлять
+
+
+  // JavaScript (AdsPower / Puppeteer / расширение) — фильтр при скролле ленты
+  function isPinterestAiPin(root = document) {
+    // 1) видимый бейдж на карточке / closeup
+    if (root.querySelector('[data-test-id="ai-generated-label"]')) return true;
+    // 2) запасной текстовый сигнал
+    const t = (root.innerText || '');
+    if (/\bAI modified\b/i.test(t) || /\bCreated with AI\b/i.test(t)) return true;
+    return false;
+  }
+
+  // пример: выкинуть AI-карточки из сетки
+  document.querySelectorAll('[data-test-id="pin"], [data-test-id="pinWrapper"]').forEach(card => {
+    if (isPinterestAiPin(card)) card.remove(); // или card.style.display = 'none'
+  });
+
+  JSON-ключ (API/SSR):  pin.digitalMediaSourceType === 11
+  JSON-ключ (доп.):     Array.isArray(pin.genAiTopics) && pin.genAiTopics.length > 0
+  CSS-селектор:         [data-test-id="ai-generated-label"]
+
+==============================================================================
+

@@ -1,0 +1,5 @@
+node_modules/
+profile/
+out/
+cdp.json
+*.log

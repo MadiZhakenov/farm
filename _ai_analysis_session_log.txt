@@ -1,0 +1,139 @@
+================================================================================
+ПОЛНЫЙ ЛОГ АНАЛИЗА Pinterest AI Detector (сессия реверса)
+================================================================================
+Дата: 2026-09-09
+Скрипт: test_pinterest_ai_detector.py
+Цель: найти маркеры «AI modified» / GenAI для фильтра AdsPower
+
+--------------------------------------------------------------------------------
+1) РАННИЕ ПРОБЫ (search / PWS walk) — промежуточные логи
+--------------------------------------------------------------------------------
+
+=== SEARCH PAGES ===
+search '3D fantasy interior AI': status=200 candidates=2
+search 'cyberpunk room AI generated': status=200 candidates=2
+search 'AI portrait': status=200 candidates=2
+  → числовые ID с search HTML часто оказались НЕ пинами (нет og:image)
+
+=== DEEP PROBE (search + today + ideas) ===
+PAGE https://www.pinterest.com/search/pins/?q=AI%20generated%20portrait
+  status=200  text hits: ['AI generated' x5]
+  blobs: __PWS_DATA__, __PWS_INITIAL_PROPS__
+  ai_keys in PWS root walk: []  (пины в SSR поиска почти не развёрнуты)
+  raw ai-ish keys (шум): ai_companion_full_page, web_pinnacle_ai_*, ...
+
+PAGE cyberpunk room / 3D fantasy interior / today /
+  text AI-badge hits: 0
+  pin_ids from PWS walk: 0
+
+=== KEY BREAKTHROUGH: pin closeup HTML ===
+PIN 340936634317338069  og=True
+  texts=['ai-generated', 'AI modified', 'AI modified', 'ai-generated', 'AI modified']
+PIN 158259374379943925  og=True  texts=['genAi']  (ЛОЖНЫЙ — имя поля/эксперимента)
+PIN 9922061675589894    og=True  texts=['genAi','genAi']  (ложный)
+
+--------------------------------------------------------------------------------
+2) FORENSIC DUMP — pin 340936634317338069
+--------------------------------------------------------------------------------
+
+-- needle 'AI modified' (DOM) --
+<div data-test-id="ai-generated-label"
+     class="ADXRXN BVzdUh gcIrSY kF2VEF sSBu24 zEVE_X"
+     style="background-color:rgb(51 51 51 / 0.8);height:44px">
+  <div class="RKO_Ey aMgNKE YfEt3H ..." title="AI modified"
+       style="-webkit-line-clamp:1">AI modified</div>
+</div>
+
+classes near badge (ХРУПКИЕ, не для прода):
+  ADXRXN, BVzdUh, gcIrSY, kF2VEF, sSBu24, zEVE_X, RKO_Ey, aMgNKE, ...
+
+data-attrs:
+  data-test-id="ai-generated-label"   ← СТАБИЛЬНЫЙ СЕЛЕКТОР
+
+-- needle 'digitalMediaSourceType':11 (JSON/SSR) --
+..."images_736x":{"url":"https://i.pinimg.com/736x/ad/3a/27/ad3a2707406a9a8a993a829c4b8e6231.jpg",
+ "height":1104,"width":736},...,"digitalMediaSourceType":11,...
+ "title":"Halloween Family Costume"...
+
+-- needle 'genAiTopics' (AI pin) --
+"genAiTopics":[{
+  "interestIdStr":"903733943146",
+  "name":"children's fashion",
+  "__typename":"GenAIInterestData"
+}]
+
+-- contrast NON-AI pin 158259374379943925 --
+"digitalMediaSourceType":null
+"genAiTopics":null
+NO data-test-id="ai-generated-label"
+
+--------------------------------------------------------------------------------
+3) CONFIRMATION MATRIX (11 пинов)
+--------------------------------------------------------------------------------
+
+pin=340936634317338069
+  has_ai_label_attr=true  badge=["AI modified"]
+  digitalMediaSourceType_values=["11"]
+  genAiTopics_presence=["["]
+  genAiTopics_samples=[{"interestIdStr":"903733943146","name":"children's fashion","__typename":"GenAIInterestData"}]
+
+pin=158259374379943925  label=false  dmst=["null"]  topics=null
+pin=9922061675589894    label=false  dmst=["null"]  topics=null
+pin=26388347813800004   label=false  dmst=["null"]  topics=null
+pin=260505159692582028  label=false  dmst=["null"]  topics=null
+pin=899664463056209065  label=false  dmst=["null"]  topics=null
+pin=34832597116688634   label=false  dmst=["null"]  topics=null
+pin=151855818681651786  label=false  dmst=["null"]  topics=null
+pin=2111131073949384    label=false  dmst=["null"]  topics=null
+pin=10062799164698488   label=false  dmst=["null"]  topics=null
+pin=205687907975908735  label=false  dmst=["null"]  topics=null
+
+search AI generated art:
+  dmst=11 count on search SSR: 0
+  ai-generated-label on search SSR: False
+  → бейдж/поля надёжнее читать на closeup /pin/{id}/ или из API-объекта пина в ленте
+
+--------------------------------------------------------------------------------
+4) ЛОЖНЫЕ ПОЛОЖИТЕЛЬНЫЕ (отфильтрованы в финальном скрипте)
+--------------------------------------------------------------------------------
+- Подстрока "GenAI" / "genAi" встречается в:
+  * experiment: unauth_seo_klp_genai_description_exp = control
+  * поле genAiTopics:null
+  * рекламные web_pinnacle_ai_* флаги
+- НЕ считать меткой пина.
+- Хеш-CSS классы (ADXRXN…) меняются — только data-test-id.
+
+--------------------------------------------------------------------------------
+5) ФИНАЛЬНЫЙ ПРОГОН test_pinterest_ai_detector.py
+--------------------------------------------------------------------------------
+(см. также файл _ai_detector_full_log.txt)
+
+Pinterest AI Detector — подготовка выборки…
+  пул кандидатов: 14 (inbox=0, seeds+search → pool=14)
+  analyze 340936634317338069 … → AI  dmst=11  label=True
+  analyze 158259374379943925 … → ok  dmst=None  label=False
+  analyze 9922061675589894 … → ok
+  analyze 26388347813800004 … → ok
+  analyze 260505159692582028 … → ok
+  analyze 899664463056209065 … → ok
+  analyze 34832597116688634 … → ok
+  analyze 151855818681651786 … → ok
+
+Проверено: 8 | С меткой ИИ: 1
+
+ТАБЛИЦА:
+  340936634317338069     ДА   digitalMediaSourceType == 11 | [data-test-id="ai-generated-label"]
+  остальные 7            нет  digitalMediaSourceType=None, genAiTopics=None
+
+ВЫВОД РЕВЕРСА:
+  1) JSON:  pin.digitalMediaSourceType === 11
+  2) JSON:  Array.isArray(pin.genAiTopics) && pin.genAiTopics.length > 0
+  3) DOM:   [data-test-id="ai-generated-label"]  (текст «AI modified»)
+
+AdsPower one-liner:
+  !!root.querySelector('[data-test-id="ai-generated-label"]')
+  || /"digitalMediaSourceType"\s*:\s*11\b/.test(html)
+
+================================================================================
+КОНЕЦ ЛОГА СЕССИИ
+================================================================================

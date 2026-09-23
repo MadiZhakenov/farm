@@ -1,0 +1,24 @@
+PIN 340936634317338069
+HTTP 200  bytes=1356633  final_url=https://www.pinterest.com/pin/340936634317338069/
+
+=== COUNTS ===
+ai-generated-label: 2
+AI modified: 4
+digitalMediaSourceType=11: 3
+genAiTopics arrays: 2
+genAiTopics null: 0
+
+=== DOM SNIPPET (ai-generated-label) ===
+button" tabindex="0"><div class="ADXRXN BGUL9_ RI9PTN TfR6nu To17G1 ekBBbl gSktR2 i1hWBD" style="margin-top:-68px"><div data-test-id="ai-generated-label" class="ADXRXN BVzdUh gcIrSY kF2VEF sSBu24 zEVE_X" style="background-color:rgb(51 51 51 / 0.8);height:44px"><div class="RKO_Ey aMgNKE YfEt3H g0zfi1 v_eFe4 qnEc35 hxKTA7 mm0O_j" title="AI modified" style="-webkit-line-clamp:1">AI modified</div></di
+
+=== JSON SNIPPET (digitalMediaSourceType:11) ===
+36x/ad/3a/27/ad3a2707406a9a8a993a829c4b8e6231.jpg","height":1104,"width":736},"images_600x315":{"url":"https://i.pinimg.com/600x315/ad/3a/27/ad3a2707406a9a8a993a829c4b8e6231.jpg"},"carouselData":null,"digitalMediaSourceType":11,"isViewedByOwnerOrEmployeeOrPartnerOfBusiness":null,"visualObjects":[],"category":"art","title":"Halloween Family Costume","unauthOnPageDescription":"Cute family Halloween costume
+
+=== JSON SNIPPET (genAiTopics) ===
+"genAiTopics":[{"interestIdStr":"903733943146","name":"children's fashion","__typename":"GenAIInterestData"}]
+
+=== ALL digitalMediaSourceType VALUES ON PAGE ===
+['11']
+
+=== CLASSES NEAR BADGE ===
+['ADXRXN BVzdUh gcIrSY kF2VEF sSBu24 zEVE_X', 'RKO_Ey aMgNKE YfEt3H g0zfi1 v_eFe4 qnEc35 hxKTA7 mm0O_j', 'ADXRXN TfR6nu gSktR2 i1hWBD mJ2PyB']
