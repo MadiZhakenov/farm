@@ -38,7 +38,7 @@ DOWNLOAD_CONCURRENCY = 12
 RELATED_DOWNLOAD_WORKERS = 10
 AI_CHECK_WORKERS = 10
 MAX_SEARCH_PINS = 40
-CANDIDATES_PER_SLIDE = 10  # больше пул → меньше emergency keep
+CANDIDATES_PER_SLIDE = 10  # больше пул -> меньше emergency keep
 RELATED_PINS_DEFAULT = 8
 # Pinterest HTML/API часто >5с при параллели — иначе массовый raw=0
 REQUEST_TIMEOUT = 20.0
@@ -46,7 +46,7 @@ CDN_TIMEOUT = 12.0
 # Сеть: primary + 1 повтор
 MAX_NETWORK_RETRIES = 2
 MAX_QUERY_ATTEMPTS = 1  # только primary — без candid/finsta-цепочек
-# Параллельный поиск: больше 2–3 = SSL/rate-limit → 0 кадров
+# Параллельный поиск: больше 2–3 = SSL/rate-limit -> 0 кадров
 SEARCH_MAX_WORKERS = 2
 WARM_COOLDOWN_SEC = 45.0
 
@@ -415,7 +415,7 @@ def finalize_photo_query(
         flags=re.I,
     )
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    # НЕ _inject_slide_noun — это и был literal word→object баг
+    # НЕ _inject_slide_noun — это и был literal word->object баг
     allow_phone = _slide_wants_phone(slide_text, cleaned)
     out = _clamp_query_words(
         cleaned, min_w=3, max_w=4, allow_phone=allow_phone
@@ -437,7 +437,7 @@ def situation_query_for_slide(
 ) -> str:
     """
     Фоллбэк search_query = выжимка из visual_scene (или текста как сцены).
-    ЗАПРЕЩЕНО: mood-стабы / keyword→object.
+    ЗАПРЕЩЕНО: mood-стабы / keyword->object.
     """
     del index
     try:
@@ -453,7 +453,7 @@ def situation_query_for_slide(
 
 # Legacy alias — GUI/старые вызовы
 def aesthetic_query_for_slide(text: str, index: int = 0) -> str:
-    """Deprecated name → situation_query_for_slide (без object-map)."""
+    """Deprecated name -> situation_query_for_slide (без object-map)."""
     return situation_query_for_slide(text, index)
 
 
@@ -527,7 +527,7 @@ def simplify_search_query(query: str) -> str:
     return cleaned or words[0]
 
 
-# Узкие слова → более частые Pinterest-синонимы (smart broaden)
+# Узкие слова -> более частые Pinterest-синонимы (smart broaden)
 _BROADEN_SYNONYMS: dict[str, str] = {
     "door": "floor",
     "doors": "floor",
@@ -551,7 +551,7 @@ def smart_broaden_queries(query: str, *, max_alts: int = 5) -> list[str]:
     """
     Если primary дал 0 результатов — расширить запрос:
     синонимы узких слов + отброс одного лишнего токена.
-    Пример: 'feet rug door candid' → 'feet rug floor candid', 'rug floor candid'…
+    Пример: 'feet rug door candid' -> 'feet rug floor candid', 'rug floor candid'…
     Без локальных заглушек.
     """
     raw = re.sub(r"\s+", " ", (query or "").strip())
@@ -669,7 +669,7 @@ def _content_tokens(text: str) -> list[str]:
 def extract_key_noun(slide_text: str, query: str = "") -> str:
     """
     Ключевой объект для noun-retry Pinterest.
-    Приоритет: первое content-слово query → tangible-map → content из слайда.
+    Приоритет: первое content-слово query -> tangible-map -> content из слайда.
     Никогда не возвращает stopwords вроде actually/honestly/yourself.
     """
     text = (slide_text or "").strip()
@@ -759,7 +759,7 @@ _WEAK_QUERY_HEADS = frozenset(
 
 
 def is_weak_pinterest_query(query: str) -> bool:
-    """Слишком абстрактный/стоковый запрос → почти всегда 0 живых фото."""
+    """Слишком абстрактный/стоковый запрос -> почти всегда 0 живых фото."""
     words = [w for w in re.split(r"\s+", (query or "").strip().lower()) if w]
     if not words:
         return True
@@ -862,7 +862,7 @@ def candidate_final_score(
     """
     final_score = relevance×0.40 + taste×0.35 + ugc×0.25
     (harmony в сигнатуре для совместимости, вес 0).
-    taste=None / untrained → 0.50.
+    taste=None / untrained -> 0.50.
     """
     del harmony
     r = max(0.0, min(1.0, float(relevance)))
@@ -928,7 +928,7 @@ def apply_pov_fashion_ugc_penalty(
     candidates: list[CandidateImage], query: str
 ) -> int:
     """
-    Если в query есть 'pov' и кадр = full-body fashion → ugc × 0.75 (−25%).
+    Если в query есть 'pov' и кадр = full-body fashion -> ugc × 0.75 (−25%).
     Возвращает число оштрафованных.
     """
     if "pov" not in (query or "").lower() or not candidates:
@@ -963,17 +963,389 @@ def apply_pov_fashion_ugc_penalty(
         except Exception:
             pass
 
-    n = 0
-    seen: set[int] = set()
     for i in flagged:
-        if i in seen:
-            continue
-        seen.add(i)
         candidates[i].ugc_score = max(
             0.0, float(candidates[i].ugc_score) * POV_FASHION_UGC_MULT
         )
-        n += 1
-    return n
+    return len(set(flagged))
+
+
+# ---------------------------------------------------------------------------
+# Gender Lock + No Faces in Body (carousel consistency)
+# ---------------------------------------------------------------------------
+
+GENDER_FEMALE_PROMPT = "a woman, a girl"
+GENDER_MALE_PROMPT = "a man, a guy"
+GENDER_LOCK_MARGIN = 0.10  # opposite gender wins by this cosine margin -> drop
+
+FACE_FRONTAL_PROMPT = (
+    "close-up frontal portrait of a person's face looking at the camera"
+)
+POV_NO_FACE_PROMPT = (
+    "first person pov hands objects shoes feet environment back of head no face"
+)
+FACE_BODY_MARGIN = 0.08
+
+# Attribute Lock (Character DNA -> SigLIP hair color / length)
+ATTR_BLONDE_PROMPT = "blonde hair, light blonde hair"
+ATTR_DARK_PROMPT = "dark hair, brunette, black hair, male"
+ATTR_LONG_PROMPT = "long hair, long flowing hair"
+ATTR_SHORT_PROMPT = "pixie cut, short hair, buzz cut"
+
+_FACE_TITLE_HINTS: tuple[str, ...] = (
+    "portrait",
+    "selfie",
+    "face",
+    "close up",
+    "closeup",
+    "headshot",
+    "mugshot",
+    "profile pic",
+    "smiling woman",
+    "smiling man",
+    "beautiful girl",
+    "handsome guy",
+)
+
+
+def gender_cosine_pair(image: Image.Image) -> tuple[float, float]:
+    """
+    Raw L2-cosine (dot) vs female/male text anchors.
+    Returns (sim_female, sim_male).
+    """
+    from core.taste_embedder import get_embedder
+    import numpy as np
+
+    emb = get_embedder()
+    i_vec = emb.embed_images([image.convert("RGB")])[0]
+    t_mat = emb.embed_texts([GENDER_FEMALE_PROMPT, GENDER_MALE_PROMPT])
+    sim_f = float(np.dot(i_vec, t_mat[0]))
+    sim_m = float(np.dot(i_vec, t_mat[1]))
+    return sim_f, sim_m
+
+
+def attribute_cosine_pair(
+    image: Image.Image, want_prompt: str, reject_prompt: str
+) -> tuple[float, float]:
+    """Dot(img, want_text) vs Dot(img, reject_text)."""
+    from core.taste_embedder import get_embedder
+    import numpy as np
+
+    emb = get_embedder()
+    i_vec = emb.embed_images([image.convert("RGB")])[0]
+    t_mat = emb.embed_texts([want_prompt, reject_prompt])
+    return float(np.dot(i_vec, t_mat[0])), float(np.dot(i_vec, t_mat[1]))
+
+
+def _dna_hair_color_prompts(
+    dna: dict[str, str] | None,
+) -> tuple[str, str] | None:
+    """(want, reject) hair-color prompts from character_dna, or None."""
+    if not dna:
+        return None
+    hair = str(dna.get("hair") or "").lower()
+    gender = str(dna.get("gender") or "female").lower()
+    if any(t in hair for t in ("blonde", "blond", "platinum", "light blonde")):
+        reject = ATTR_DARK_PROMPT
+        if gender != "female":
+            reject = "dark hair, brunette, black hair, woman"
+        return ATTR_BLONDE_PROMPT, reject
+    if any(
+        t in hair
+        for t in ("brunette", "dark hair", "black hair", "brown hair", "dark ")
+    ):
+        return (
+            "dark hair, brunette, brown hair, black hair",
+            "blonde hair, light blonde hair, platinum blonde",
+        )
+    if "ginger" in hair or "red" in hair or "auburn" in hair:
+        return (
+            "ginger hair, red hair, auburn hair",
+            "blonde hair, black hair, dark brunette",
+        )
+    return None
+
+
+def _dna_hair_length_prompts(
+    dna: dict[str, str] | None,
+) -> tuple[str, str] | None:
+    """(want, reject) length prompts when DNA specifies long/short."""
+    if not dna:
+        return None
+    hair = str(dna.get("hair") or "").lower()
+    if "long" in hair:
+        return ATTR_LONG_PROMPT, ATTR_SHORT_PROMPT
+    if "short" in hair or "pixie" in hair or "buzz" in hair:
+        return ATTR_SHORT_PROMPT, ATTR_LONG_PROMPT
+    return None
+
+
+def _query_is_personish(text: str) -> bool:
+    """True if query/title implies a person, hair, or hands (needs attribute gate)."""
+    low = (text or "").lower()
+    # word-boundary match — plain "man" in "window"/"human" must NOT fire
+    return bool(
+        re.search(
+            r"\b(girl|guy|woman|women|man|men|person|people|hair|"
+            r"blonde|blond|brunette|hand|hands|selfie|mirror|"
+            r"portrait|face|model|behind)\b",
+            low,
+        )
+    )
+
+
+def attribute_mismatches_dna(
+    image: Image.Image,
+    character_dna: dict[str, str] | None,
+    title: str = "",
+    *,
+    query: str = "",
+) -> bool:
+    """
+    True = hard-drop: candidate hair/gender attributes clash with character_dna.
+    Blonde lock: drop if score_dark > score_blonde.
+    Long-hair lock: drop if short/pixie beats long.
+    Skipped for pure object/environment pins (door/sneakers/chair) — SigLIP
+    hair prompts are meaningless there and cause false rejects.
+    """
+    if not character_dna:
+        return False
+    # Object-only slide query + non-person title → no hair gating
+    personish = _query_is_personish(query) or _query_is_personish(title)
+    if not personish:
+        return False
+
+    low = (title or "").lower()
+    hair = str(character_dna.get("hair") or "").lower()
+    gender = str(character_dna.get("gender") or "").lower()
+
+    # Fast title rejects
+    if gender == "female" and any(
+        h in low for h in ("man ", " men", "guy ", "male model", "boyfriend")
+    ):
+        return True
+    if "blonde" in hair or "blond" in hair:
+        if any(
+            h in low
+            for h in ("brunette", "black hair", "dark hair", "pixie cut")
+        ):
+            if "blonde" not in low and "blond" not in low:
+                return True
+    if "long" in hair and any(
+        h in low for h in ("pixie", "buzz cut", "short bob", "crew cut")
+    ):
+        return True
+
+    color_pair = _dna_hair_color_prompts(character_dna)
+    if color_pair:
+        want, reject = color_pair
+        try:
+            score_want, score_reject = attribute_cosine_pair(
+                image, want, reject
+            )
+            if score_reject > score_want:
+                return True
+        except Exception:
+            pass
+
+    length_pair = _dna_hair_length_prompts(character_dna)
+    if length_pair:
+        want_l, reject_l = length_pair
+        try:
+            score_longish, score_shortish = attribute_cosine_pair(
+                image, want_l, reject_l
+            )
+            if score_shortish > score_longish:
+                return True
+        except Exception:
+            pass
+
+    return False
+
+
+def apply_attribute_lock_filter(
+    candidates: list[CandidateImage],
+    character_dna: dict[str, str] | None,
+    *,
+    slide_index: int = 0,
+    query: str = "",
+) -> tuple[list[CandidateImage], int]:
+    """
+    Hard attribute gate when character_dna is set AND the slide/candidate
+    looks personish. Object-only slides skip hair SigLIP.
+    """
+    if not character_dna or not candidates:
+        return candidates, 0
+    # Whole-slide skip for pure environment queries
+    if query and not _query_is_personish(query):
+        return candidates, 0
+    kept: list[CandidateImage] = []
+    dropped = 0
+    hair = str(character_dna.get("hair") or "")
+    for c in candidates:
+        q = query or getattr(c, "query", "") or ""
+        if attribute_mismatches_dna(
+            c.image, character_dna, c.title, query=q
+        ):
+            dropped += 1
+            c.is_relevant = False
+            c.relevance_reason = (
+                f"attribute-lock: mismatch vs DNA hair={hair!r}"
+            )
+            continue
+        kept.append(c)
+    if dropped:
+        print(
+            f"[attr-lock] slide {slide_index + 1}: dropped {dropped} "
+            f"(dna hair={hair!r}, left={len(kept)})"
+        )
+    return kept, dropped
+
+
+def infer_carousel_gender(image: Image.Image) -> str:
+    """Slide-1 lock: 'female' if sim_female > sim_male else 'male'."""
+    try:
+        sim_f, sim_m = gender_cosine_pair(image)
+        gender = "female" if sim_f > sim_m else "male"
+        print(
+            f"[gender-lock] slide1 -> {gender} "
+            f"(female={sim_f:.3f} male={sim_m:.3f})"
+        )
+        return gender
+    except Exception as exc:
+        print(f"[gender-lock] infer fail: {exc} - default female")
+        return "female"
+
+
+def gender_mismatches_lock(
+    image: Image.Image, carousel_gender: str, title: str = ""
+) -> bool:
+    """
+    True = drop candidate: opposite gender attributes clearly dominate.
+    female lock -> drop if sim_male > sim_female + margin
+    male lock -> drop if sim_female > sim_male + margin
+    """
+    g = (carousel_gender or "").strip().lower()
+    if g not in ("female", "male"):
+        return False
+    low = (title or "").lower()
+    if g == "female" and any(
+        h in low for h in ("man ", " men", "guy ", "male ", "boyfriend", "husband")
+    ):
+        return True
+    if g == "male" and any(
+        h in low
+        for h in ("woman", "girl ", "female", "girlfriend", "wife", "ladies")
+    ):
+        return True
+    try:
+        sim_f, sim_m = gender_cosine_pair(image)
+        if g == "female":
+            return sim_m > sim_f + GENDER_LOCK_MARGIN
+        return sim_f > sim_m + GENDER_LOCK_MARGIN
+    except Exception:
+        return False
+
+
+def looks_like_frontal_face(image: Image.Image, title: str = "") -> bool:
+    """Large frontal face / portrait — forbidden on body slides 2..N."""
+    low = (title or "").lower()
+    if any(h in low for h in _FACE_TITLE_HINTS):
+        return True
+    try:
+        from core.taste_embedder import get_embedder
+
+        emb = get_embedder()
+        face = float(
+            emb.compute_text_image_relevances(FACE_FRONTAL_PROMPT, [image])[0]
+        )
+        pov = float(
+            emb.compute_text_image_relevances(POV_NO_FACE_PROMPT, [image])[0]
+        )
+        return face > pov + FACE_BODY_MARGIN
+    except Exception:
+        return False
+
+
+def apply_gender_lock_filter(
+    candidates: list[CandidateImage],
+    carousel_gender: str | None,
+    *,
+    slide_index: int = 0,
+) -> tuple[list[CandidateImage], int]:
+    """
+    Slides 2..N: drop opposite-gender attributes vs slide-1 lock.
+    Returns (kept, dropped_count). Slide 1 is never gender-filtered.
+    """
+    if slide_index <= 0 or not carousel_gender or not candidates:
+        return candidates, 0
+    kept: list[CandidateImage] = []
+    dropped = 0
+    for c in candidates:
+        if gender_mismatches_lock(c.image, carousel_gender, c.title):
+            dropped += 1
+            c.is_relevant = False
+            c.relevance_reason = (
+                f"gender-lock ({carousel_gender}): opposite attributes"
+            )
+            continue
+        kept.append(c)
+    if dropped:
+        print(
+            f"[gender-lock] slide {slide_index + 1}: dropped {dropped} "
+            f"(lock={carousel_gender}, left={len(kept)})"
+        )
+    return kept, dropped
+
+
+def apply_no_faces_body_filter(
+    candidates: list[CandidateImage],
+    *,
+    slide_index: int = 0,
+) -> tuple[list[CandidateImage], int]:
+    """
+    Slides 2..N: drop frontal portraits; prefer POV / hands / objects.
+    Slide 1 may keep faces.
+    """
+    if slide_index <= 0 or not candidates:
+        return candidates, 0
+    kept: list[CandidateImage] = []
+    dropped = 0
+    for c in candidates:
+        if looks_like_frontal_face(c.image, c.title):
+            dropped += 1
+            c.is_relevant = False
+            c.relevance_reason = "no-faces-body: frontal portrait"
+            continue
+        kept.append(c)
+    if dropped:
+        print(
+            f"[no-faces] slide {slide_index + 1}: dropped {dropped} "
+            f"frontal faces (left={len(kept)})"
+        )
+    return kept, dropped
+
+
+def _filter_consistency_gates(
+    candidates: list[CandidateImage],
+    *,
+    slide_index: int = 0,
+    carousel_gender: str | None = None,
+    character_dna: dict[str, str] | None = None,
+    query: str = "",
+) -> list[CandidateImage]:
+    """Attribute DNA + no-faces + gender lock (pre-rank)."""
+    if not candidates:
+        return candidates
+    out = candidates
+    out, _ = apply_attribute_lock_filter(
+        out, character_dna, slide_index=slide_index, query=query
+    )
+    out, _ = apply_no_faces_body_filter(out, slide_index=slide_index)
+    out, _ = apply_gender_lock_filter(
+        out, carousel_gender, slide_index=slide_index
+    )
+    return out
 
 
 def title_looks_like_junk(title: str) -> bool:
@@ -1048,7 +1420,7 @@ def looks_like_flat_gradient(image: Image.Image) -> bool:
             r2, g2, b2 = px[i + 1]
             if abs(r1 - r2) + abs(g1 - g2) + abs(b1 - b2) > 40:
                 diffs += 1
-        # почти нет резких переходов → подозрительно гладко
+        # почти нет резких переходов -> подозрительно гладко
         return diffs < 18
     except Exception:
         return False
@@ -1124,6 +1496,8 @@ class PinMeta:
     image_url: str
     orig_url: str
     is_ai: bool | None = None
+    # True when returned via soft-reuse after run-wide pin exhaustion
+    reuse_after_exhaustion: bool = False
 
 
 @dataclass
@@ -1147,6 +1521,8 @@ class CandidateImage:
     ugc_scored: bool = False
     harmony_score: float = 100.0
     selection_mode: str = ""
+    # Propagated from PinMeta when soft-reused after used_pins exhaustion
+    reuse_after_exhaustion: bool = False
 
 
 def weighted_promote_top3(
@@ -1155,7 +1531,7 @@ def weighted_promote_top3(
     mode: str = "hard_top3_sample",
 ) -> list[CandidateImage]:
     """
-    Взвешенный выбор среди топ-3 по combined_score; победитель → индекс 0.
+    Взвешенный выбор среди топ-3 по combined_score; победитель -> индекс 0.
     Не трогает пул с единственным кандидатом; нулевые веса страхуем.
     """
     if not ranked:
@@ -1289,11 +1665,22 @@ def _pin_from_obj(obj: dict[str, Any]) -> PinMeta | None:
 def _dedupe_pins(items: list[PinMeta], limit: int = MAX_SEARCH_PINS) -> list[PinMeta]:
     seen: set[str] = set()
     out: list[PinMeta] = []
+    # PhotoVault blacklist — мгновенный отсев до download
+    try:
+        from core.photo_vault import get_photo_vault
+
+        vault = get_photo_vault()
+    except Exception:
+        vault = None
+    blocked_n = 0
     for p in items:
         # ЗАПРЕТ: зомби img000 / pin_img000 (ненастоящий id, часто градиент-мусор)
         if is_fake_stub_pin_id(p.pin_id):
             continue
         if not re.fullmatch(r"\d{6,20}", str(p.pin_id or "")):
+            continue
+        if vault is not None and vault.is_blacklisted(p.pin_id):
+            blocked_n += 1
             continue
         if p.pin_id in seen:
             continue
@@ -1301,6 +1688,8 @@ def _dedupe_pins(items: list[PinMeta], limit: int = MAX_SEARCH_PINS) -> list[Pin
         out.append(p)
         if len(out) >= limit:
             break
+    if blocked_n:
+        print(f"[vault] blacklist drop ×{blocked_n} (pre-download)")
     return out
 
 
@@ -1335,7 +1724,7 @@ def _to_736x(url: str) -> str:
         return url.replace("/originals/", "/736x/")
     if "/736x/" in url:
         return url
-    # generic size tier → 736x
+    # generic size tier -> 736x
     return re.sub(r"/(\d+x)/", "/736x/", url, count=1)
 
 
@@ -1451,7 +1840,7 @@ def dedupe_carousel_pools(
             pid = str(ranked[0].pin_id or "")
             if pid:
                 claimed.add(pid)
-        # переставляем: выбранный уникальный → [0]
+        # переставляем: выбранный уникальный -> [0]
         chosen = ranked[pick_i]
         rest = [c for i, c in enumerate(ranked) if i != pick_i]
         # остальное тоже чистим от уже claimed (мягко)
@@ -1502,7 +1891,7 @@ class PinterestHarvester:
         self._io_lock = threading.Lock()  # csrf/cookies
         self._used_lock = threading.Lock()
         self._timing_lock = threading.Lock()
-        # Один поиск за раз — иначе 6× SSL handshake → raw=0
+        # Один поиск за раз — иначе 6× SSL handshake -> raw=0
         self._search_lock = threading.Lock()
         self._warm_lock = threading.Lock()
         self._last_warm_ts = 0.0
@@ -1559,27 +1948,45 @@ class PinterestHarvester:
     ) -> tuple[list[PinMeta], int, int]:
         """
         Свежие (не в _used_pin_ids) предпочтительны.
-        HARD BAN: pin из _used_pin_ids НИКОГДА не возвращаются
-        (никакого soft-reuse least-used — это давало один pin на 8 каруселей).
+
+        При полном истощении уникальных pin в длинном батче (все eligible
+        уже в used) — soft-reuse кандидатов с минимальным pin_use_counts,
+        с флагом reuse_after_exhaustion=True (для meta.json).
 
         Returns: (selected, raw_count, dups_count)
         """
         raw_count = len(pins)
         eligible = [p for p in pins if p.pin_id not in exclude]
         if ignore_used:
+            for p in eligible:
+                p.reuse_after_exhaustion = False
             return eligible, raw_count, 0
         with self._used_lock:
             used = set(self._used_pin_ids)
+            counts = dict(self._pin_use_counts)
         fresh = [p for p in eligible if p.pin_id not in used]
         dups_count = len(eligible) - len(fresh)
         if fresh:
+            for p in fresh:
+                p.reuse_after_exhaustion = False
             return fresh, raw_count, dups_count
-        if used and eligible:
-            print(
-                f"[dedupe] HARD BAN: все {len(eligible)} pin уже в used "
-                f"(used={len(used)}) — пустой пул, без soft-reuse"
-            )
-        return [], raw_count, dups_count
+        if not eligible:
+            return [], raw_count, dups_count
+        # Pin exhaustion safety: least-used among eligible (never empty list)
+        n = max(1, int(want))
+        reused = sorted(
+            eligible,
+            key=lambda p: (int(counts.get(p.pin_id, 0)), str(p.pin_id)),
+        )[:n]
+        for p in reused:
+            p.reuse_after_exhaustion = True
+        min_c = int(counts.get(reused[0].pin_id, 0)) if reused else 0
+        print(
+            f"[dedupe] PIN EXHAUSTION: soft-reuse least-used "
+            f"x{len(reused)} (min_count={min_c}, used={len(used)}, "
+            f"eligible={len(eligible)}) - reuse_after_exhaustion=true"
+        )
+        return reused, raw_count, dups_count
 
     def reset_timing(self) -> None:
         with self._timing_lock:
@@ -1777,7 +2184,7 @@ class PinterestHarvester:
         _AI_CHECK_CAP = 12
         if len(need) > _AI_CHECK_CAP:
             for p in need[_AI_CHECK_CAP:]:
-                p.is_ai = False  # неизвестно → пропускаем без API
+                p.is_ai = False  # неизвестно -> пропускаем без API
             need = need[:_AI_CHECK_CAP]
         t0 = time.perf_counter()
         if need:
@@ -1902,6 +2309,9 @@ class PinterestHarvester:
                 image=img,
                 via_fallback=via_fallback,
                 bytes_len=len(body),
+                reuse_after_exhaustion=bool(
+                    getattr(pin, "reuse_after_exhaustion", False)
+                ),
             )
 
     async def download_candidates(
@@ -2119,14 +2529,17 @@ class PinterestHarvester:
         anchor_image: Image.Image | None = None,
         query: str = "",
         visual_scene: str = "",
+        slide_index: int = 0,
+        carousel_gender: str | None = None,
+        character_dna: dict[str, str] | None = None,
     ) -> list[CandidateImage]:
         """
         Single-pass scoring:
         1) junk (обои/виджеты/3D);
-        2) UGC/Taste/Rel scores; POV+full-body fashion → ugc×0.75;
-        3) final = rel×0.40 + taste×0.35 + ugc×0.25;
-        4) soft gate: ugc < 0.38 / taste < 0.35 / rel < 0.12 → вне топа;
-           если после гейта пусто — caller берёт emergency из сырого пула.
+        2) attribute DNA + body: no frontal faces + gender lock;
+        3) UGC/Taste/Rel scores; POV+full-body fashion -> ugc×0.75;
+        4) final = rel×0.40 + taste×0.35 + ugc×0.25;
+        5) soft gate floors -> вне топа.
         """
         del min_score
         pre: list[CandidateImage] = []
@@ -2145,6 +2558,21 @@ class PinterestHarvester:
         if junk_n:
             self._status(f"Анти-мусор: отброшено {junk_n} обоев/градиентов/виджетов")
         if not pre:
+            return []
+
+        # Attribute DNA + gender + no faces before SigLIP soft gates
+        pre = _filter_consistency_gates(
+            pre,
+            slide_index=slide_index,
+            carousel_gender=carousel_gender,
+            character_dna=character_dna,
+            query=query,
+        )
+        if not pre:
+            self._status(
+                f"Consistency: 0 left after attr/gender/face gates "
+                f"(slide {slide_index + 1})"
+            )
             return []
 
         pre = self._apply_text_relevance_gate(
@@ -2245,6 +2673,9 @@ class PinterestHarvester:
         anchor_image: Image.Image | None = None,
         apply_score: bool = True,
         visual_scene: str = "",
+        slide_index: int = 0,
+        carousel_gender: str | None = None,
+        character_dna: dict[str, str] | None = None,
     ) -> tuple[list[CandidateImage], HarvestProgress]:
         fetch = max(limit, int(fetch_limit or limit), 3)
         pool = pins[:fetch]
@@ -2259,6 +2690,9 @@ class PinterestHarvester:
                 anchor_image=anchor_image,
                 query=query,
                 visual_scene=visual_scene,
+                slide_index=slide_index,
+                carousel_gender=carousel_gender,
+                character_dna=character_dna,
             )
             cands = cands[: max(limit, 1)]
         dl_prog.downloaded = len(cands)
@@ -2273,6 +2707,9 @@ class PinterestHarvester:
         limit: int = CANDIDATES_PER_SLIDE,
         anchor_image: Image.Image | None = None,
         visual_scene: str = "",
+        slide_index: int = 0,
+        carousel_gender: str | None = None,
+        character_dna: dict[str, str] | None = None,
     ) -> list[CandidateImage]:
         """SigLIP UGC + Relevance + Taste (sync wrapper, single-pass)."""
         if not candidates:
@@ -2292,6 +2729,9 @@ class PinterestHarvester:
                 anchor_image=anchor_image,
                 query=query,
                 visual_scene=visual_scene,
+                slide_index=slide_index,
+                carousel_gender=carousel_gender,
+                character_dna=character_dna,
             )
         )
         return kept[: max(limit, 1)]
@@ -2581,7 +3021,7 @@ class PinterestHarvester:
         visual_scene: str = "",
     ) -> tuple[list[CandidateImage], HarvestProgress]:
         """
-        Полный цикл: Pinterest search → ИИ-отсев → полный CDN gather →
+        Полный цикл: Pinterest search -> ИИ-отсев -> полный CDN gather ->
         смысл/UGC/вкус. Без candid/finsta-retry (дают 0 и тормозят).
         При пустых гейтах — emergency из уже скачанного пула.
         """
@@ -2602,11 +3042,11 @@ class PinterestHarvester:
         _ = query_cache_dir(q)
 
         pins_raw = self.search(q)
-        # Пустая сеть → warm + soft retry, затем Smart Broaden (не локальные stub!)
+        # Пустая сеть -> warm + soft retry, затем Smart Broaden (не локальные stub!)
         if not pins_raw:
             print(
                 f"[Слайд {slide_label}] Pinterest Search '{q}': "
-                f"получено из сети=0 → warm_session + retry"
+                f"получено из сети=0 -> warm_session + retry"
             )
             self.warm_session()
             time.sleep(0.5)
@@ -2626,7 +3066,7 @@ class PinterestHarvester:
         if not pins_raw and do_broaden:
             for alt_q in smart_broaden_queries(q, max_alts=5):
                 print(
-                    f"[Слайд {slide_label}] Smart Broaden: «{q}» → «{alt_q}»"
+                    f"[Слайд {slide_label}] Smart Broaden: «{q}» -> «{alt_q}»"
                 )
                 alt_pins = self.search(alt_q, finalize=False)
                 if alt_pins:
@@ -2650,6 +3090,17 @@ class PinterestHarvester:
                 f"[Слайд {slide_label}] DROP fake stub pins "
                 f"img000×{before - len(pins)}"
             )
+        # PhotoVault blacklist — никогда не скачиваем / не показываем
+        try:
+            from core.photo_vault import drop_blacklisted_pins
+
+            pins, bl_n = drop_blacklisted_pins(pins)
+            if bl_n:
+                print(
+                    f"[Слайд {slide_label}] vault blacklist drop ×{bl_n}"
+                )
+        except Exception as exc:
+            print(f"[vault] filter skip: {exc}")
         print(
             f"[Слайд {slide_label}] Pinterest Search '{q}': "
             f"получено из сети={raw_count}, отсеяно повторов={dups_count}, "
@@ -2704,6 +3155,7 @@ class PinterestHarvester:
                 limit=limit,
                 anchor_image=anchor_image,
                 visual_scene=scene,
+                slide_index=int(slide_index) if slide_index is not None else 0,
             )
 
         # НЕ баним альтернативы / сырой пул — только mark_used(финал) снаружи
@@ -2894,17 +3346,26 @@ class PinterestHarvester:
         topic: str = "",
         max_attempts: int = MAX_QUERY_ATTEMPTS,
         max_workers: int = 6,
+        character_dna: dict[str, str] | None = None,
     ) -> list[tuple[list[CandidateImage], HarvestProgress, str]]:
         """
         1) asyncio.gather — параллельный Pinterest search+CDN всех слайдов
         2) затем SigLIP (UGC/Relevance/Taste) последовательно на GPU
 
         slides: (query, text, idx) или (query, text, idx, visual_scene)
+        character_dna: optional passport -> attribute + gender lock
         """
         n = len(slides)
         if n == 0:
             return []
 
+        self.last_attribute_consistency: str | None = None
+        dna = character_dna if isinstance(character_dna, dict) else None
+        if dna:
+            print(
+                f"[attr-lock] character_dna active: "
+                f"gender={dna.get('gender')} hair={dna.get('hair')!r}"
+            )
         def _norm(
             item: tuple,
         ) -> tuple[str, str, int, str]:
@@ -2916,7 +3377,7 @@ class PinterestHarvester:
 
         normalized = [_norm(s) for s in slides]
 
-        # Не больше SEARCH_MAX_WORKERS — иначе SSL/rate-limit → raw=0
+        # Не больше SEARCH_MAX_WORKERS — иначе SSL/rate-limit -> raw=0
         workers = max(1, min(int(max_workers), SEARCH_MAX_WORKERS, max(n, 1)))
 
         # Один прогрев ДО параллели (не из 6 воркеров сразу)
@@ -2997,15 +3458,23 @@ class PinterestHarvester:
         pin_wall = time.perf_counter() - t_pin0
 
         # Фаза SigLIP — последовательно (CUDA + один _LOCK)
+        # Gender: DNA gender preferred; else infer from slide 1 winner
         t_sig0 = time.perf_counter()
         self.reset_timing()  # накопители гейтов; wall ниже важнее
-        scored: list[tuple[list[CandidateImage], HarvestProgress, str]] = []
-        for (q, text, idx, scene), (cands, prog, used_q) in zip(
-            normalized, raw
-        ):
+        # Process in slide_index order so gender lock sees slide 1 first
+        order = sorted(range(n), key=lambda i: normalized[i][2])
+        carousel_gender: str | None = None
+        if dna and str(dna.get("gender") or "").lower() in ("female", "male"):
+            carousel_gender = str(dna["gender"]).lower()
+            print(f"[gender-lock] from character_dna -> {carousel_gender}")
+        interim: dict[int, tuple[list[CandidateImage], HarvestProgress, str]] = {}
+
+        for pos in order:
+            q, text, idx, scene = normalized[pos]
+            cands, prog, used_q = raw[pos]
             slide_no = idx + 1
             if not cands:
-                scored.append(([], prog, used_q))
+                interim[pos] = ([], prog, used_q)
                 continue
             original_pool = list(cands)
             kept = self.score_candidates(
@@ -3014,16 +3483,28 @@ class PinterestHarvester:
                 query=used_q or q,
                 limit=limit,
                 visual_scene=scene,
+                slide_index=idx,
+                carousel_gender=carousel_gender,
+                character_dna=dna,
             )
             win_q = used_q or q
-            # Soft-gate пуст — emergency из уже скачанных (без candid-retry)
+            # Soft-gate пуст — emergency из уже скачанных (с теми же consistency gates)
             if not kept:
                 print(
                     f"[WARNING] Слайд {slide_no}: нет selectable "
                     f"из {len(original_pool)} кадров — emergency-keep"
                 )
+                pool_em = _filter_consistency_gates(
+                    list(original_pool),
+                    slide_index=idx,
+                    carousel_gender=carousel_gender,
+                    character_dna=dna,
+                    query=used_q or q,
+                )
+                if not pool_em:
+                    pool_em = list(original_pool)
                 kept = self.rank_pool_emergency(
-                    original_pool,
+                    pool_em,
                     slide_text=text,
                     query=used_q or q,
                     limit=max(limit, 1),
@@ -3041,11 +3522,33 @@ class PinterestHarvester:
                     visual_scene=scene,
                 )
                 if g_kept:
+                    # Still drop frontal faces / gender / attr clash when possible
+                    g_kept = _filter_consistency_gates(
+                        g_kept,
+                        slide_index=idx,
+                        carousel_gender=carousel_gender,
+                        character_dna=dna,
+                        query=win_q,
+                    ) or g_kept
                     kept = g_kept
                     win_q = g_q or win_q
+            # Lock gender from slide 1 winner if DNA did not set it
+            if idx == 0 and kept and carousel_gender is None:
+                try:
+                    carousel_gender = infer_carousel_gender(kept[0].image)
+                except Exception as exc:
+                    print(f"[gender-lock] slide1 lock fail: {exc}")
+                    carousel_gender = "female"
             prog.downloaded = len(kept)
             prog.stage = "done" if kept else "filtered_empty"
-            scored.append((kept, prog, win_q))
+            interim[pos] = (kept, prog, win_q)
+
+        scored = [interim[i] for i in range(n)]
+        if carousel_gender:
+            print(f"[gender-lock] carousel locked as {carousel_gender}")
+        if dna:
+            self.last_attribute_consistency = "pass"
+            print("[attr-lock] attribute_consistency=pass")
 
         # Пустые после download (до SigLIP) — тоже guarantee
         for i, ((q, text, idx, scene), (cands, prog, used_q)) in enumerate(
@@ -3076,7 +3579,7 @@ class PinterestHarvester:
             ] != [c.pin_id for c in (new_pool[:1] or [])]:
                 print(
                     f"[dedupe] slide pin {cands[0].pin_id if cands else '—'} "
-                    f"→ {new_pool[0].pin_id if new_pool else '—'}"
+                    f"-> {new_pool[0].pin_id if new_pool else '—'}"
                 )
             # Hard-ban финальных pin сразу — следующие карусели / slides не возьмут
             if new_pool and new_pool[0].pin_id:
@@ -3095,7 +3598,7 @@ class PinterestHarvester:
 
     # ------------------------------------------------------------------
     # Ideas / recommendation-like feed (без логина)
-    # UserHomefeedResource требует auth → берём /ideas/{topic} + Related.
+    # UserHomefeedResource требует auth -> берём /ideas/{topic} + Related.
     # ------------------------------------------------------------------
 
     def discover_idea_topics(self) -> list[tuple[str, str]]:

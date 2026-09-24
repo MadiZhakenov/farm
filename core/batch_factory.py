@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Пакетная сборка каруселей: Gemini → Pinterest → Color Matcher → render → disk.
+Пакетная сборка каруселей: Gemini -> Pinterest -> Color Matcher -> render -> disk.
 
 Строго последовательно, gc.collect() после каждой карусели (8 ГБ RAM/VRAM).
 """
@@ -204,7 +204,8 @@ def build_one_carousel(
     queries = queries[: len(texts)]
     scenes = (scenes + [""] * len(texts))[: len(texts)]
 
-    # Run-level HARD BAN: финалы прошлых каруселей. Soft-reuse запрещён.
+    # Run-level ban: финалы прошлых каруселей. Soft-reuse только
+    # после полного истощения пула (см. _select_pins_avoiding_used).
     harvester.reset_used()
     if used_pins_run:
         harvester.seed_used(used_pins_run)
@@ -239,6 +240,9 @@ def build_one_carousel(
         ) from exc
 
     harvester.reset_timing()
+    character_dna = result.get("character_dna")
+    if not isinstance(character_dna, dict):
+        character_dna = None
     harvested = harvester.harvest_slides_parallel(
         specs,
         limit=CANDIDATES,
@@ -246,6 +250,7 @@ def build_one_carousel(
         topic=topic,
         max_attempts=1,
         max_workers=2,
+        character_dna=character_dna,
     )
     print(
         f"[TIMER] 2. Поиск и фильтрация в Pinterest (все слайды): "
@@ -283,6 +288,11 @@ def build_one_carousel(
         "variation_index": variation_index,
         "model": result.get("model"),
         "dna_archetype": result.get("dna_archetype"),
+        "character_dna": character_dna,
+        "attribute_consistency": (
+            getattr(harvester, "last_attribute_consistency", None)
+            or ("pass" if character_dna else None)
+        ),
         "quality": result.get("quality"),
         "few_shot_source": result.get("few_shot_source"),
         "slides": [],
@@ -332,39 +342,41 @@ def build_one_carousel(
         out_jpg = folder / f"{i + 1}.jpg"
         rendered.save(out_jpg, quality=92, optimize=True)
         sel_mode = getattr(cand, "selection_mode", "") or "single_pass_argmax"
-        meta["slides"].append(
-            {
-                "index": i + 1,
-                "text": s.text,
-                "query": s.query,
-                "selected_alt": s.selected,
-                "alt_count": min(len(s.candidates), MAX_ALTS_SAVED),
-                "pin_id": cand.pin_id,
-                "alt_pin_ids": alt_pin_ids,
-                "selection_mode": sel_mode,
-                "relevance_score": float(cand.relevance_score or 0),
-                "text_relevance": (
-                    round(float(cand.text_relevance), 4)
-                    if getattr(cand, "text_relevance_scored", False)
-                    else None
-                ),
-                "taste_score": (
-                    round(float(cand.taste_score), 4)
-                    if getattr(cand, "taste_scored", False)
-                    else None
-                ),
-                "ugc_score": (
-                    round(float(cand.ugc_score), 4)
-                    if getattr(cand, "ugc_scored", False)
-                    else None
-                ),
-                "relevance_reason": cand.relevance_reason or "",
-                "combined_score": float(cand.combined_score or 0),
-                "slot": getattr(rmeta, "slot", None),
-                "font_size": rmeta.font_size,
-                "file": out_jpg.name,
-            }
-        )
+        reuse_flag = bool(getattr(cand, "reuse_after_exhaustion", False))
+        slide_meta: dict[str, Any] = {
+            "index": i + 1,
+            "text": s.text,
+            "query": s.query,
+            "selected_alt": s.selected,
+            "alt_count": min(len(s.candidates), MAX_ALTS_SAVED),
+            "pin_id": cand.pin_id,
+            "alt_pin_ids": alt_pin_ids,
+            "selection_mode": sel_mode,
+            "relevance_score": float(cand.relevance_score or 0),
+            "text_relevance": (
+                round(float(cand.text_relevance), 4)
+                if getattr(cand, "text_relevance_scored", False)
+                else None
+            ),
+            "taste_score": (
+                round(float(cand.taste_score), 4)
+                if getattr(cand, "taste_scored", False)
+                else None
+            ),
+            "ugc_score": (
+                round(float(cand.ugc_score), 4)
+                if getattr(cand, "ugc_scored", False)
+                else None
+            ),
+            "relevance_reason": cand.relevance_reason or "",
+            "combined_score": float(cand.combined_score or 0),
+            "slot": getattr(rmeta, "slot", None),
+            "font_size": rmeta.font_size,
+            "file": out_jpg.name,
+        }
+        if reuse_flag:
+            slide_meta["reuse_after_exhaustion"] = True
+        meta["slides"].append(slide_meta)
         del rendered
         hard_gc()
 
@@ -376,13 +388,42 @@ def build_one_carousel(
         used_pins_run.update(selected_pins)
         harvester.mark_used(selected_pins)
         print(
-            f"[dedupe] финалы карусели → used_pins_run "
+            f"[dedupe] финалы карусели -> used_pins_run "
             f"+{len(selected_pins)} (всего {len(used_pins_run)})"
         )
+
+    # PhotoVault: авто-регистрация финальных фото в библиотеку
+    try:
+        from core.photo_vault import get_photo_vault
+
+        vault_items: list[dict[str, Any]] = []
+        for s in batch_slides:
+            if not s.candidates:
+                continue
+            cand = s.candidates[s.selected]
+            if not cand.pin_id:
+                continue
+            vault_items.append(
+                {
+                    "pin_id": str(cand.pin_id),
+                    "image": cand.image,
+                    "query": s.query,
+                    "image_url": getattr(cand, "source_url", "") or "",
+                    "tags": topic,
+                }
+            )
+        if vault_items:
+            get_photo_vault().register_selected(vault_items)
+    except Exception as exc:
+        print(f"[vault] auto-register skip: {exc}")
 
     status(f"[{index}] Caption…")
     caption = generate_caption(texts, topic, product)
     (folder / "caption.txt").write_text(caption + "\n", encoding="utf-8")
+    if any(
+        bool(s.get("reuse_after_exhaustion")) for s in meta.get("slides", [])
+    ):
+        meta["reuse_after_exhaustion"] = True
     (folder / "meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -514,13 +555,36 @@ def run_batch(
                 else:
                     on_status(f"[{i}] OK · {snap.line()}")
         except Exception as exc:
+            # Topic skip: не роняем весь батч — пишем FAILED и идём дальше
             result.failed += 1
+            warn = (
+                f"[BATCH WARNING] Пропуск темы '{cur_topic}' "
+                f"из-за отсутствия фото."
+            )
+            # Более точный текст, если причина не про фото
+            exc_s = str(exc)
+            if "фото" not in exc_s.lower() and "pinterest" not in exc_s.lower() and "photo" not in exc_s.lower() and "No photos" not in exc_s:
+                warn = (
+                    f"[BATCH WARNING] Пропуск темы '{cur_topic}' "
+                    f"из-за ошибки сборки."
+                )
+            print(warn)
+            print(f"[BATCH WARNING] detail: {exc_s}")
             if on_status:
-                on_status(f"[{i}] FAIL («{cur_topic[:40]}»): {exc}")
+                on_status(f"{warn} · {exc_s[:120]}")
             err = run_dir / f"{folder_name}_FAILED.txt"
             err.write_text(
-                f"topic: {cur_topic}\n{exc}", encoding="utf-8"
+                (
+                    f"topic: {cur_topic}\n"
+                    f"index: {i}\n"
+                    f"folder: {folder_name}\n"
+                    f"reason: {exc_s}\n"
+                    f"skipped: true\n"
+                    f"continued_batch: true\n"
+                ),
+                encoding="utf-8",
             )
+            # не re-raise — следующая тема из очереди
         hard_gc()
 
     usage = meter.summary_dict()

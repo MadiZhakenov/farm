@@ -52,9 +52,10 @@ from core.llm_engine import (
     UGC_QUERY_MARKERS,
 )
 from core.renderer import render_preview, render_slide
+from photo_library_panel import PhotoLibraryPanel
 from review_panel import ReviewPanel
 from ui_hotkeys import enable_edit_hotkeys
-
+from core.photo_vault import get_photo_vault
 # ---------------------------------------------------------------------------
 # Константы UI
 # ---------------------------------------------------------------------------
@@ -433,6 +434,15 @@ class CarouselFactoryApp:
         teacher_host = tk.Frame(self.notebook, bg=BG)
         self.notebook.add(teacher_host, text="  🎓 Обучение (Teacher Mode)  ")
         self._build_teacher_tab(teacher_host)
+
+        vault_host = tk.Frame(self.notebook, bg=BG)
+        self.notebook.add(vault_host, text="  🖼️ Библиотека фото  ")
+        self.photo_library = PhotoLibraryPanel(
+            vault_host,
+            on_status=self._set_status,
+            vault=get_photo_vault(),
+        )
+        self.photo_library.pack(fill=tk.BOTH, expand=True)
 
         # LEFT
         left = tk.Frame(factory, bg=PANEL, width=300)
@@ -1127,6 +1137,9 @@ class CarouselFactoryApp:
                 pass
             elif not self._teacher_busy and self._teacher_round_id > 0 and not self._teacher_side_a.get("cands"):
                 self.root.after(80, self._teacher_start_round)
+        # Библиотека фото = 4-я вкладка (index 3)
+        if tab == 3:
+            self.root.after(40, self.photo_library.refresh)
 
     def _on_global_key(self, event: tk.Event) -> str | None:  # type: ignore[type-arg]
         try:
@@ -2461,6 +2474,34 @@ class CarouselFactoryApp:
             (out / "caption.txt").write_text(caption + "\n", encoding="utf-8")
             self._last_export = out
 
+            # PhotoVault: финальные фото -> библиотека
+            try:
+                vault_items: list[dict[str, Any]] = []
+                for slide in self._slides:
+                    cand = slide.selected_candidate()
+                    if cand is None or not cand.pin_id:
+                        continue
+                    vault_items.append(
+                        {
+                            "pin_id": str(cand.pin_id),
+                            "image": cand.image,
+                            "query": slide.query,
+                            "image_url": getattr(cand, "source_url", "") or "",
+                            "tags": (self._topics_from_ui() or [""])[0],
+                        }
+                    )
+                if vault_items:
+                    n = get_photo_vault().register_selected(vault_items)
+                    if n:
+                        self.root.after(
+                            0,
+                            lambda: self._set_status(
+                                f"Экспорт OK · +{n} фото в библиотеку"
+                            ),
+                        )
+            except Exception as exc:
+                print(f"[vault] export register skip: {exc}")
+
             # освобождаем тяжёлый кэш превью / кандидатов после экспорта
             self.root.after(0, self._release_ram_keep_ui)
 
@@ -2633,6 +2674,10 @@ class CarouselFactoryApp:
 
         def finish() -> None:
             self.export_info.configure(text=str(result.run_dir))
+            try:
+                self.photo_library.refresh()
+            except Exception:
+                pass
             if messagebox.askyesno(
                 "Batch готов",
                 msg + "\n\nОткрыть вкладку «Быстрый отсмотр»?",
