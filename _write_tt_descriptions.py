@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Copy TT captions into sorted_carousels group folders."""
+"""One tt_descriptions.txt per group with all 20 captions + hashtags."""
 
 from __future__ import annotations
 
@@ -16,12 +16,15 @@ def main() -> None:
             continue
         man_path = group_dir / "manifest.json"
         if not man_path.exists():
-            print("skip", group_dir.name)
             continue
         man = json.loads(man_path.read_text(encoding="utf-8"))
         run = man.get("run") or ""
+
+        # remove per-carousel tt files
+        for old in group_dir.glob("sort_*_tt.txt"):
+            old.unlink()
+
         blocks: list[str] = []
-        missing = 0
         for car in man["carousels"]:
             n = int(car["sort"])
             topic = str(car.get("topic") or "").strip()
@@ -30,22 +33,12 @@ def main() -> None:
                 caption = src.read_text(encoding="utf-8").strip()
             else:
                 caption = f"{topic}\n\n#fyp #selfgrowth #mindset"
-                missing += 1
-            (group_dir / f"sort_{n}_tt.txt").write_text(
-                caption + "\n", encoding="utf-8"
-            )
-            blocks.append(
-                f"===== sort_{n} =====\n"
-                f"Topic: {topic}\n\n"
-                f"{caption}\n"
-            )
-        (group_dir / "tt_descriptions.txt").write_text(
-            "\n".join(blocks) + "\n", encoding="utf-8"
-        )
-        print(
-            f"{group_dir.name}: 20 sort_N_tt.txt + tt_descriptions.txt "
-            f"(missing_caption={missing})"
-        )
+            blocks.append(f"{n}.\n{caption}")
+
+        text = "\n\n".join(blocks) + "\n"
+        out_path = group_dir / "tt_descriptions.txt"
+        out_path.write_text(text, encoding="utf-8")
+        print(f"{group_dir.name}: wrote {out_path.name} ({len(blocks)} captions)")
 
 
 if __name__ == "__main__":

@@ -40,15 +40,21 @@ MAX_TEXT_WIDTH_RATIO = 0.76
 MAX_TEXT_WIDTH = int(SLIDE_W * MAX_TEXT_WIDTH_RATIO)  # ~820
 
 MAX_TEXT_AREA_RATIO = 0.24
-# Pixel-locked vs ammyeyelash 3.jpg (1170×1560 → 1080×1440):
-# Bold 64 / stroke 4 / gap 11 @ orig → Bold 59 / stroke 4 / gap 10 @ 1080
-FONT_START = 59
+# Pixel-locked vs ammyeyelash 3.jpg @ 1080 (continuous draw, no per-glyph stroke inflate):
+# SemiBold 61 / stroke 3 / tracking 0 / shadow (0,1) / advance 73
+# width MAE ≈ 2.4px vs ref line boxes
+FONT_START = 61
 FONT_MIN = 42
 FONT_STEP = 1
-LINE_HEIGHT_RATIO = 1.17  # gap = (ratio - 1) * font_size ≈ 10 @ 59pt
+LINE_ADVANCE_RATIO = 73.0 / 61.0  # band pitch / font size @ 1080 lock
+LINE_HEIGHT_RATIO = 1.12  # fallback gap ratio if bbox measure unavailable
+LETTER_SPACING = 0.0  # keep 0 — char-by-char stroke inflates width
+# TikTok slideshow: hard 1px drop under glyphs
+TEXT_SHADOW_OFFSET = (0, 1)
 
 TEXT_FILL = (255, 255, 255, 255)  # #FFFFFF
 STROKE_FILL = (0, 0, 0, 255)      # #000000
+SHADOW_FILL = (0, 0, 0, 255)
 
 # миниатюра для negative-space анализа
 NS_W = 180
@@ -67,13 +73,6 @@ MONTSERRAT_URL = (
 )
 
 _FONT_CANDIDATES = (
-    FONTS_DIR / "TikTokSans-Bold.ttf",
-    FONTS_DIR
-    / "TikTokSans"
-    / "TikTokSans-v4.000"
-    / "fonts"
-    / "ttf"
-    / "TikTokSans36pt-Bold.ttf",
     FONTS_DIR / "TikTokSans-SemiBold.ttf",
     FONTS_DIR
     / "TikTokSans"
@@ -81,13 +80,21 @@ _FONT_CANDIDATES = (
     / "fonts"
     / "ttf"
     / "TikTokSans36pt-SemiBold.ttf",
+    FONTS_DIR / "TikTokSans-Bold.ttf",
+    FONTS_DIR
+    / "TikTokSans"
+    / "TikTokSans-v4.000"
+    / "fonts"
+    / "ttf"
+    / "TikTokSans36pt-Bold.ttf",
     MONTSERRAT_BOLD,
     FONTS_DIR / "Inter-Bold.ttf",
     FONTS_DIR / "ProximaNova-Bold.ttf",
     Path(r"C:\Windows\Fonts\montserrat-bold.ttf"),
     Path(r"C:\Windows\Fonts\Montserrat-Bold.ttf"),
     Path(r"C:\Windows\Fonts\arialbd.ttf"),
-    Path(r"C:\Windows\Fonts\seguiuib.ttf"),
+    Path(r"C:\Windows\Fonts\seguisb.ttf"),
+    Path(r"C:\Windows\Fonts\seguiib.ttf"),
     Path(r"C:\Windows\Fonts\segoeuib.ttf"),
     Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
     Path("/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
@@ -115,17 +122,25 @@ class SlideRenderMeta:
 
 
 def stroke_width_for(font_size: int, zone_luma: float = 128.0) -> int:
-    """Pixel-locked TikTok slideshow stroke ≈ 4px @ 1080; чуть толще на светлых зонах."""
-    base = 4 if font_size >= 48 else 3
-    if zone_luma >= 170:
-        return base + 1
-    if zone_luma >= 140:
-        return base + 1
-    return base
+    """Pixel-locked TikTok slideshow stroke = 3px @ SemiBold 61 lock.
+
+    zone_luma retained for API compat; do NOT inflate stroke — thicker outlines
+    break the pixel match vs native TikTok text.
+    """
+    _ = zone_luma
+    return 3 if font_size >= 48 else 2
 
 
-def line_spacing_for(font_size: int) -> int:
-    """Межстрочный зазор под line-height ≈ 1.17 (pixel-lock ammyeyelash)."""
+def line_advance_for(font_size: int) -> int:
+    """Целевой шаг строк — pixel-lock ammyeyelash (79px @ SemiBold 67pt)."""
+    return max(1, int(round(font_size * LINE_ADVANCE_RATIO)))
+
+
+def line_spacing_for(font_size: int, line_box_height: int | None = None) -> int:
+    """Межстрочный зазор = target_advance − высота строки (со stroke)."""
+    target = line_advance_for(font_size)
+    if line_box_height is not None and line_box_height > 0:
+        return max(2, target - line_box_height)
     return max(2, int(round(font_size * (LINE_HEIGHT_RATIO - 1.0))))
 
 
@@ -226,6 +241,60 @@ def _text_bbox(
     )
 
 
+def _line_width(
+    font: ImageFont.ImageFont,
+    text: str,
+    stroke: int,
+    tracking: float = LETTER_SPACING,
+) -> float:
+    """Width of a line including stroke and letter-spacing."""
+    if not text:
+        return float(2 * stroke)
+    if abs(tracking) < 1e-9:
+        probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+        bb = _text_bbox(probe, (0, 0), text, font, stroke)
+        return float(bb[2] - bb[0])
+    total = sum(float(font.getlength(ch)) for ch in text)
+    total += tracking * max(0, len(text) - 1)
+    return total + 2 * stroke
+
+
+def _draw_tracked_text(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[float, float],
+    text: str,
+    font: ImageFont.ImageFont,
+    *,
+    fill,
+    stroke_width: int,
+    stroke_fill,
+    tracking: float = LETTER_SPACING,
+) -> None:
+    x, y = xy
+    if abs(tracking) < 1e-9:
+        draw.text(
+            (x, y),
+            text,
+            font=font,
+            fill=fill,
+            stroke_width=stroke_width,
+            stroke_fill=stroke_fill,
+            align="center",
+        )
+        return
+    cur = float(x)
+    for ch in text:
+        draw.text(
+            (int(round(cur)), y),
+            ch,
+            font=font,
+            fill=fill,
+            stroke_width=stroke_width,
+            stroke_fill=stroke_fill,
+        )
+        cur += float(font.getlength(ch)) + tracking
+
+
 def _wrap_paragraph(
     text: str,
     font: ImageFont.ImageFont,
@@ -240,8 +309,7 @@ def _wrap_paragraph(
     current = words[0]
     for word in words[1:]:
         trial = f"{current} {word}"
-        bbox = _text_bbox(draw, (0, 0), trial, font, stroke)
-        if bbox[2] - bbox[0] <= max_width:
+        if _line_width(font, trial, stroke) <= max_width:
             current = trial
         else:
             lines.append(current)
@@ -278,12 +346,16 @@ def _measure_block(
     heights: list[int] = []
     for line in lines:
         bbox = _text_bbox(draw, (0, 0), line, font, stroke)
-        widths.append(bbox[2] - bbox[0])
+        widths.append(int(round(_line_width(font, line, stroke))))
         heights.append(bbox[3] - bbox[1])
     line_h = max(heights)
-    gap = line_spacing_for(font_size)
+    advance = line_advance_for(font_size)
+    # keep a tiny gap even if FreeType box is unusually tall
+    if advance < line_h + 2:
+        advance = line_h + 2
+    gap = advance - line_h
     total_h = line_h * len(lines) + gap * max(0, len(lines) - 1)
-    return (max(widths) if widths else 0), total_h, line_h + gap
+    return (max(widths) if widths else 0), total_h, advance
 
 
 # ---------------------------------------------------------------------------
@@ -518,18 +590,33 @@ def render_slide(
     text_top = y0 + max(0, (box_h - block_h) // 2)
     y = text_top
     cx = x0 + box_w // 2
+    shx, shy = TEXT_SHADOW_OFFSET
     for line in meta.lines:
         bbox = _text_bbox(probe, (0, 0), line, font, stroke)
-        lw = bbox[2] - bbox[0]
-        x = cx - lw // 2 - bbox[0]
-        draw.text(
-            (x, y - bbox[1]),
+        lw = _line_width(font, line, stroke)
+        x = cx - lw / 2.0
+        # when tracking=0, PIL bbox left bearing must be subtracted
+        if abs(LETTER_SPACING) < 1e-9:
+            x = cx - lw / 2.0 - bbox[0]
+        yy = y - bbox[1]
+        if shx or shy:
+            _draw_tracked_text(
+                draw,
+                (x + shx, yy + shy),
+                line,
+                font,
+                fill=SHADOW_FILL,
+                stroke_width=stroke,
+                stroke_fill=SHADOW_FILL,
+            )
+        _draw_tracked_text(
+            draw,
+            (x, yy),
             line,
-            font=font,
+            font,
             fill=TEXT_FILL,
             stroke_width=stroke,
             stroke_fill=STROKE_FILL,
-            align="center",
         )
         y += advance
 
