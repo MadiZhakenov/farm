@@ -99,16 +99,28 @@ class UGCFilter:
         return float(scores[0]) if len(scores) else 0.5
 
     def get_ugc_scores(self, images: Sequence[Image.Image]) -> np.ndarray:
-        """Пакетный UGC-скор, shape (N,)."""
+        """Пакетный UGC-скор, shape (N,). Предпочитает обученную голову."""
         if not images:
             return np.zeros((0,), dtype=np.float32)
+
+        # Supervised live-vs-stock (если обучена) — точнее zero-shot якорей
+        try:
+            from core.ugc_classifier import get_ugc_live_classifier
+
+            clf = get_ugc_live_classifier()
+            if clf.is_trained:
+                return np.asarray(
+                    clf.predict_live_scores(list(images)), dtype=np.float32
+                )
+        except Exception:
+            pass
+
         self.ensure()
         assert self._ugc_vec is not None and self._stock_vec is not None
 
         from core.taste_embedder import get_embedder
 
         img_vecs = get_embedder().embed_images(list(images))
-        # косинус = dot при L2-норме
         sim_ugc = img_vecs @ self._ugc_vec
         sim_stock = img_vecs @ self._stock_vec
         out = np.empty((len(images),), dtype=np.float32)
