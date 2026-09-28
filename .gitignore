@@ -27,6 +27,7 @@ curated_collection/
 data/
 forensic_tmp/
 .tmp/
+yandex_videos/
 
 # Dependencies & caches
 node_modules/

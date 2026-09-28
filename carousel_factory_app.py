@@ -2670,6 +2670,11 @@ class CarouselFactoryApp:
             f"Batch готов ({mode}): {result.made}/{total} ок, "
             f"fail={result.failed}\n{result.run_dir}"
         )
+        if result.failed:
+            msg += (
+                "\n\nНеполные карусели не сохраняются (partial wipe). "
+                "Перезапусти fail-темы — completion-fill подтянет фото."
+            )
         self._set_status(msg.replace("\n", " · "))
 
         def finish() -> None:
@@ -2678,8 +2683,9 @@ class CarouselFactoryApp:
                 self.photo_library.refresh()
             except Exception:
                 pass
+            title = "Batch готов" if not result.failed else "Batch с пропусками"
             if messagebox.askyesno(
-                "Batch готов",
+                title,
                 msg + "\n\nОткрыть вкладку «Быстрый отсмотр»?",
             ):
                 self.review.load_run(result.run_dir)

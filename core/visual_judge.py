@@ -27,7 +27,7 @@ def combined_rank_score(
     relevance: float | None = None,
 ) -> float:
     """
-    relevance×0.40 + taste×0.35 + ugc×0.25
+    relevance×0.30 + taste×0.30 + ugc×0.40
     """
     from core.ugc_filter import final_rank_score
 

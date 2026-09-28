@@ -43,30 +43,139 @@ RELATED_PINS_DEFAULT = 8
 # Pinterest HTML/API часто >5с при параллели — иначе массовый raw=0
 REQUEST_TIMEOUT = 20.0
 CDN_TIMEOUT = 12.0
+# Fail-fast dead TLS; successful reads still use REQUEST_TIMEOUT
+CONNECT_TIMEOUT = 5.0
 # Сеть: primary + 1 повтор
 MAX_NETWORK_RETRIES = 2
 MAX_QUERY_ATTEMPTS = 1  # только primary — без candid/finsta-цепочек
-# Параллельный поиск: больше 2–3 = SSL/rate-limit -> 0 кадров
-SEARCH_MAX_WORKERS = 2
+# 3 slide-workers: fewer wait waves for 6 slides; same pins/quality
+SEARCH_MAX_WORKERS = 3
 WARM_COOLDOWN_SEC = 45.0
 
 # Text↔image (SigLIP) + финальный ранг после полной загрузки пула
 TEXT_RELEVANCE_MIN = 0.08  # legacy alias; отбор — SELECT_RELEVANCE_MIN
-# Мягче: метафоричные тексты не обнуляют пул
 SELECT_RELEVANCE_MIN = 0.08
-# Смысл + вкус главнее сырости (мягкий баланс, без пустых слайдов)
-FINAL_REL_W = 0.40
-FINAL_TASTE_W = 0.35
-FINAL_UGC_W = 0.25
+# ---------------------------------------------------------------------------
+# Selection contract:
+#   STRICT=True → normal path never soft-ships junk (pool_soft / guarantee_soft off).
+#   COMPLETION_FILL=True → if still empty after vibe+guarantee, last-mile soft keep
+#   so the factory NEVER ships a carousel with a missing slide. Marked in meta.
+# ---------------------------------------------------------------------------
+STRICT_SELECTION_CONTRACT = True
+COMPLETION_FILL_ENABLED = True
+SOFT_REL_ENABLED = not STRICT_SELECTION_CONTRACT
+POOL_SOFT_UGC_ENABLED = not STRICT_SELECTION_CONTRACT
+GUARANTEE_SOFT_ENABLED = not STRICT_SELECTION_CONTRACT
+# Last-mile floors (only COMPLETION_FILL path)
+COMPLETION_UGC_FLOOR = 0.32
+COMPLETION_REL_FLOOR = 0.05
+COMPLETION_MAX_SEARCHES = 4
+SOFT_REL_FLOOR = 0.02
+# Taste: раньше саботировал (красивый сток бил живое в ранге).
+# Режим VETO: вкус считает и режет совсем чужое, но НЕ влияет на вес ранга.
+TASTE_ENABLED = True
+TASTE_VETO_ONLY = True  # True = floor only, weight 0 in final score
+FINAL_REL_W = 0.35
+FINAL_TASTE_W = 0.0 if (not TASTE_ENABLED or TASTE_VETO_ONLY) else 0.30
+FINAL_UGC_W = 0.65 if (not TASTE_ENABLED or TASTE_VETO_ONLY) else 0.40
 FINAL_HARM_W = 0.0
-# Мягкие полы (цель: emergency keep < 25%)
-UGC_HARD_FLOOR = 0.35
-# Вкус < 35% — DROP ALWAYS (в т.ч. emergency / guarantee)
-TASTE_HARD_FLOOR = 0.35
-# Emergency-keep: те же полы + запрет rel < EMERGENCY_REL_FLOOR
-EMERGENCY_UGC_FLOOR = 0.35
-EMERGENCY_TASTE_FLOOR = 0.35
-EMERGENCY_REL_FLOOR = 0.05  # ниже — полный оффтоп, даже в emergency не брать
+# Полы синхронизированы с probe (live≈0.55): ниже 0.50 = сток/глянец → DROP
+UGC_HARD_FLOOR = 0.55
+# Soft band: real night-fridge / messy-counter often land 0.45–0.51.
+# Allow ONLY when relevance already proves scene match (not stock-bypass).
+UGC_SOFT_FLOOR = 0.48
+UGC_SOFT_REL_MIN = 0.30
+# Vibe scenes (rain/glass/sky/mirror): SigLIP often scores ugc 0.25–0.44
+# even on good UGC frames — allow lower floor when rel already proves match.
+UGC_VIBE_SOFT_FLOOR = 0.32
+UGC_VIBE_SOFT_REL_MIN = 0.55
+_VIBE_SCENE_RE = re.compile(
+    r"\b("
+    r"rain|rainy|window|windows|glass|mirror|reflection|silhouette|"
+    r"sky|skyline|storefront|shop\s*window|city\s*lights|bokeh|"
+    r"hallway|dusk|twilight"
+    r")\b",
+    re.I,
+)
+# Вкус < 40% — DROP (staged / AI-look); 0 если TASTE_ENABLED=False
+TASTE_HARD_FLOOR = 0.0 if not TASTE_ENABLED else 0.40
+# Emergency: hard floor OR soft-band with rel (same as main gate)
+EMERGENCY_UGC_FLOOR = UGC_HARD_FLOOR if STRICT_SELECTION_CONTRACT else 0.48
+EMERGENCY_TASTE_FLOOR = 0.0 if not TASTE_ENABLED else 0.38
+EMERGENCY_REL_FLOOR = (
+    SELECT_RELEVANCE_MIN if STRICT_SELECTION_CONTRACT else 0.05
+)
+# Guarantee soft floor — only used when GUARANTEE_SOFT_ENABLED
+GUARANTEE_UGC_FLOOR = UGC_HARD_FLOOR if STRICT_SELECTION_CONTRACT else 0.42
+
+
+def is_vibe_scene(visual_scene: str = "", query: str = "", slide_text: str = "") -> bool:
+    """True for rain/glass/sky/mirror scenes where UGC scorer is unreliable."""
+    blob = f"{visual_scene} {query} {slide_text}"
+    return bool(_VIBE_SCENE_RE.search(blob or ""))
+
+
+def ugc_eligible(
+    ugc: float,
+    rel: float = 0.0,
+    *,
+    visual_scene: str = "",
+    query: str = "",
+    slide_text: str = "",
+) -> bool:
+    """Hard UGC floor, or soft band when relevance already clears."""
+    u = float(ugc or 0.0)
+    r = float(rel or 0.0)
+    # Avoid float-edge drops at exactly ~0.45 / 0.52
+    u_r = round(u, 4)
+    r_r = round(r, 4)
+    if u_r >= UGC_HARD_FLOOR:
+        return True
+    if u_r >= UGC_SOFT_FLOOR and r_r >= UGC_SOFT_REL_MIN:
+        return True
+    if (
+        is_vibe_scene(visual_scene, query, slide_text)
+        and u_r >= UGC_VIBE_SOFT_FLOOR
+        and r_r >= UGC_VIBE_SOFT_REL_MIN
+    ):
+        return True
+    return False
+
+
+def ugc_is_borderline(
+    ugc: float,
+    rel: float = 0.0,
+    *,
+    visual_scene: str = "",
+    query: str = "",
+    slide_text: str = "",
+) -> bool:
+    """
+    True when the frame is only eligible via soft/vibe soft bands —
+    not hard UGC ≥0.55. These need a vision glance, not auto-pass.
+    """
+    u_r = round(float(ugc or 0.0), 4)
+    if u_r >= UGC_HARD_FLOOR:
+        return False
+    return ugc_eligible(
+        ugc,
+        rel,
+        visual_scene=visual_scene,
+        query=query,
+        slide_text=slide_text,
+    )
+
+
+# Soft-band frames: moondream KEEP required (no formula auto-pass)
+BORDERLINE_VISION_ENABLED = True
+BORDERLINE_VISION_FAIL_CLOSED = True  # no ollama → soft band DROP
+BORDERLINE_VISION_MAX = 6  # max vision calls per slide
+
+GUARANTEE_MAX_SEARCHES = 2
+# Hard cap: primary+alt+vibe rescues — no 13min retry death spiral
+SLIDE_SEARCH_BUDGET = 5
+MERGE_DOWNLOAD_CAP = 14
+RESCUE_DOWNLOAD_CAP = 10
 # Last-resort: без фиктивных стабов — только нейтральный запас, если сцена пуста
 LAST_RESORT_QUERIES: tuple[str, ...] = ()
 # Fake pin_id от HTML-скрейпа без реального id (зомби-градиенты)
@@ -207,6 +316,80 @@ JUNK_TITLE_TERMS: tuple[str, ...] = (
     "ui kit",
     "ios widget",
     "android widget",
+    # org / wellness pantry & product pack — confession vibe killers
+    "pantry organization",
+    "organized pantry",
+    "pantry makeover",
+    "pantry goals",
+    "pantry inspo",
+    "walk-in pantry",
+    "walk in pantry",
+    "kitchen organization",
+    "snack station",
+    "pantry labels",
+    "container store",
+    "home organization",
+    "product photography",
+    "product shot",
+    "pack shot",
+    "packaging design",
+    "stock photo",
+    "getty images",
+    "shutterstock",
+    # retail / brand / lookbook / UI chrome — drop before download
+    "armani",
+    "gucci",
+    "louis vuitton",
+    "chanel",
+    "prada",
+    "nike store",
+    "adidas store",
+    "zara window",
+    "h&m window",
+    "shop window display",
+    "window display mannequin",
+    "mannequin display",
+    "retail display",
+    "department store",
+    "fashion lookbook",
+    "street style blog",
+    "outfit of the day",
+    "ootd",
+    "camera ui",
+    "iphone camera",
+    "ios camera",
+    "android camera",
+    "screenshot",
+    "screen recording",
+    "instagram story",
+    "instagram ui",
+    "tiktok ui",
+    "stories template",
+    "xiaohongshu",
+    "rednote",
+    "little red book",
+)
+
+# Title phrases that mark org/product junk even as substrings
+_CONFESSION_VIBE_BAN_TITLE: tuple[str, ...] = (
+    "pantry organization",
+    "organized pantry",
+    "pantry makeover",
+    "kitchen organization",
+    "snack station",
+    "walk-in pantry",
+    "walk in pantry",
+    "product photography",
+    "packaging design",
+    "amazon finds",
+    "homeroom",
+    "window display",
+    "mannequin",
+    "lookbook",
+    "outfit of the day",
+    "camera app",
+    "instagram ui",
+    "screenshot",
 )
 
 # Скрытый ИИ без официальной метки Pinterest — по тексту пина
@@ -710,20 +893,33 @@ def build_relevance_text(
     visual_scene: str = "",
 ) -> str:
     """
-    Короткий визуальный якорь для SigLIP text↔image.
-
-    Приоритет: visual_scene (физика кадра) — строго против картинки.
-    Абстрактный slide text НЕ используется, когда есть visual_scene
-    (иначе «Смысл: 0%» на метафорах).
+    Primary SigLIP anchor. Prefer visual_scene physics; else query+props.
     """
+    texts = build_relevance_texts(
+        slide_text, query, visual_scene=visual_scene
+    )
+    return texts[0] if texts else "lifestyle photo"
+
+
+def build_relevance_texts(
+    slide_text: str,
+    query: str = "",
+    *,
+    visual_scene: str = "",
+) -> list[str]:
+    """
+    One or two anchors: scene physics AND confession-prop vibe.
+    Caller takes max(score_scene, score_vibe) per image.
+    """
+    out: list[str] = []
     scene = re.sub(r"\s+", " ", (visual_scene or "").strip())
     if len(scene) >= 8:
-        # Обрезаем до разумной длины для SigLIP
         words = scene.split()
         if len(words) > 28:
             scene = " ".join(words[:28])
-        return scene
+        out.append(scene)
 
+    # Vibe / prop anchor from slide text + query (even when scene exists)
     parts: list[str] = []
     q = (query or "").strip()
     if q:
@@ -736,17 +932,40 @@ def build_relevance_text(
             parts.append(tangible)
     except Exception:
         pass
+    try:
+        from core.query_forge import _extract_props
+
+        for phrase in _extract_props(
+            f"{slide_text} {query} {visual_scene}", limit=2
+        ):
+            if phrase.lower() not in {p.lower() for p in parts}:
+                parts.append(phrase)
+    except Exception:
+        pass
     extra = _content_tokens(slide_text or "")[:6]
     for w in extra:
         if w not in {p.lower() for p in parts}:
-            # не дублировать слова уже в query
             if q and w in q.lower().split():
                 continue
             parts.append(w)
         if len(" ".join(parts).split()) >= 10:
             break
-    joined = " ".join(parts).strip()
-    return joined or q or "lifestyle photo"
+    vibe = " ".join(parts).strip()
+    if vibe:
+        # Skip near-duplicate of scene
+        if not out or vibe.lower() != out[0].lower():
+            # Enough overlap with scene → don't burn a second SigLIP call
+            if out:
+                scene_toks = set(out[0].lower().split())
+                vibe_toks = set(vibe.lower().split())
+                overlap = len(scene_toks & vibe_toks) / max(len(vibe_toks), 1)
+                if overlap < 0.6:
+                    out.append(vibe)
+            else:
+                out.append(vibe)
+    if not out:
+        out.append(q or "lifestyle photo")
+    return out[:2]
 
 
 _WEAK_QUERY_HEADS = frozenset(
@@ -860,7 +1079,7 @@ def candidate_final_score(
     taste: float | None = None,
 ) -> float:
     """
-    final_score = relevance×0.40 + taste×0.35 + ugc×0.25
+    final_score = relevance×0.30 + taste×0.30 + ugc×0.40
     (harmony в сигнатуре для совместимости, вес 0).
     taste=None / untrained -> 0.50.
     """
@@ -976,7 +1195,15 @@ def apply_pov_fashion_ugc_penalty(
 
 GENDER_FEMALE_PROMPT = "a woman, a girl"
 GENDER_MALE_PROMPT = "a man, a guy"
-GENDER_LOCK_MARGIN = 0.10  # opposite gender wins by this cosine margin -> drop
+# Drop when opposite gender is within this of the lock (was 0.10 — too soft on hands)
+GENDER_LOCK_MARGIN = 0.02
+
+FEMININE_HANDS_PROMPT = (
+    "woman hands, feminine hands, manicured nails, nail polish, long nails"
+)
+MASCULINE_HANDS_PROMPT = (
+    "man hands, masculine hands, male hands, no nail polish, short nails"
+)
 
 FACE_FRONTAL_PROMPT = (
     "close-up frontal portrait of a person's face looking at the camera"
@@ -991,6 +1218,53 @@ ATTR_BLONDE_PROMPT = "blonde hair, light blonde hair"
 ATTR_DARK_PROMPT = "dark hair, brunette, black hair, male"
 ATTR_LONG_PROMPT = "long hair, long flowing hair"
 ATTR_SHORT_PROMPT = "pixie cut, short hair, buzz cut"
+# Want must beat reject by this margin, else drop (stops blonde↔brunette ties)
+ATTR_COLOR_MARGIN = 0.015
+ATTR_LENGTH_MARGIN = 0.015
+PERSON_PRESENT_PROMPT = (
+    "a person visible in frame, human body hair face hands silhouette"
+)
+NO_PERSON_PROMPT = (
+    "empty room objects only still life interior no people no human"
+)
+PERSON_PRESENT_MARGIN = 0.02
+
+_FEMALE_TITLE_HINTS: tuple[str, ...] = (
+    "woman",
+    "girl ",
+    "female",
+    "girlfriend",
+    "wife",
+    "ladies",
+    "manicure",
+    "nail polish",
+    "nails",
+    "lipstick",
+    "bra ",
+    "dress",
+    "blouse",
+)
+_MALE_TITLE_HINTS: tuple[str, ...] = (
+    "man ",
+    " men",
+    "guy ",
+    "male ",
+    "boyfriend",
+    "husband",
+    "beard",
+)
+
+
+def image_has_visible_person(image: Image.Image) -> bool:
+    """SigLIP: True if a person (body/hair/face) is likely visible."""
+    try:
+        score_p, score_n = attribute_cosine_pair(
+            image, PERSON_PRESENT_PROMPT, NO_PERSON_PROMPT
+        )
+        return score_p > score_n + PERSON_PRESENT_MARGIN
+    except Exception:
+        return False
+
 
 _FACE_TITLE_HINTS: tuple[str, ...] = (
     "portrait",
@@ -1046,22 +1320,31 @@ def _dna_hair_color_prompts(
     hair = str(dna.get("hair") or "").lower()
     gender = str(dna.get("gender") or "female").lower()
     if any(t in hair for t in ("blonde", "blond", "platinum", "light blonde")):
-        reject = ATTR_DARK_PROMPT
+        reject = "dark hair, brunette, black hair, ginger hair, red hair"
         if gender != "female":
-            reject = "dark hair, brunette, black hair, woman"
+            reject = "dark hair, brunette, black hair, woman, long nails"
         return ATTR_BLONDE_PROMPT, reject
+    # light brown / caramel before generic brown
+    if any(
+        t in hair
+        for t in ("light brown", "caramel", "honey", "dirty blonde")
+    ) or ("light" in hair and "brown" in hair):
+        return (
+            "light brown hair, dirty blonde hair, honey brown hair, caramel hair",
+            "platinum blonde hair, jet black hair, ginger red hair",
+        )
     if any(
         t in hair
         for t in ("brunette", "dark hair", "black hair", "brown hair", "dark ")
     ):
         return (
             "dark hair, brunette, brown hair, black hair",
-            "blonde hair, light blonde hair, platinum blonde",
+            "blonde hair, light blonde hair, platinum blonde, ginger hair, red hair",
         )
     if "ginger" in hair or "red" in hair or "auburn" in hair:
         return (
             "ginger hair, red hair, auburn hair",
-            "blonde hair, black hair, dark brunette",
+            "blonde hair, platinum blonde, black hair, dark brunette",
         )
     return None
 
@@ -1087,11 +1370,16 @@ def _query_is_personish(text: str) -> bool:
     return bool(
         re.search(
             r"\b(girl|guy|woman|women|man|men|person|people|hair|"
-            r"blonde|blond|brunette|hand|hands|selfie|mirror|"
+            r"blonde|blond|brunette|ginger|auburn|hand|hands|selfie|mirror|"
             r"portrait|face|model|behind)\b",
             low,
         )
     )
+
+
+def _query_is_handsish(text: str) -> bool:
+    low = (text or "").lower()
+    return bool(re.search(r"\b(hand|hands|holding|manicure|nails)\b", low))
 
 
 def attribute_mismatches_dna(
@@ -1103,39 +1391,94 @@ def attribute_mismatches_dna(
 ) -> bool:
     """
     True = hard-drop: candidate hair/gender attributes clash with character_dna.
-    Blonde lock: drop if score_dark > score_blonde.
-    Long-hair lock: drop if short/pixie beats long.
-    Skipped for pure object/environment pins (door/sneakers/chair) — SigLIP
-    hair prompts are meaningless there and cause false rejects.
+
+    Personish queries always gated. Object/environment queries are gated ONLY
+    when a person is actually visible in the image (fixes brunette-on-blonde
+    pantry etc.). Empty object still-lifes skip hair SigLIP.
+    Outfit is intentionally ignored — only hair color/length + gender.
     """
     if not character_dna:
         return False
-    # Object-only slide query + non-person title → no hair gating
     personish = _query_is_personish(query) or _query_is_personish(title)
     if not personish:
-        return False
+        # Object query — gate only if a person slipped into the frame
+        if not image_has_visible_person(image):
+            return False
 
     low = (title or "").lower()
     hair = str(character_dna.get("hair") or "").lower()
     gender = str(character_dna.get("gender") or "").lower()
+    handsish = _query_is_handsish(query) or _query_is_handsish(title)
 
-    # Fast title rejects
-    if gender == "female" and any(
-        h in low for h in ("man ", " men", "guy ", "male model", "boyfriend")
-    ):
+    # Fast title rejects (gender)
+    if gender == "female" and any(h in low for h in _MALE_TITLE_HINTS):
         return True
+    if gender == "male" and any(h in low for h in _FEMALE_TITLE_HINTS):
+        return True
+
+    # Fast title rejects (hair color family)
     if "blonde" in hair or "blond" in hair:
         if any(
             h in low
-            for h in ("brunette", "black hair", "dark hair", "pixie cut")
+            for h in (
+                "brunette",
+                "black hair",
+                "dark hair",
+                "ginger",
+                "redhead",
+                "auburn",
+                "pixie cut",
+            )
         ):
             if "blonde" not in low and "blond" not in low:
+                return True
+    if any(t in hair for t in ("brunette", "brown", "dark", "black")):
+        if any(
+            h in low
+            for h in ("blonde", "blond", "platinum", "ginger", "redhead", "auburn")
+        ):
+            if not any(t in low for t in ("brunette", "brown", "dark", "black")):
+                return True
+    if any(t in hair for t in ("ginger", "red", "auburn")):
+        if any(
+            h in low for h in ("blonde", "blond", "platinum", "brunette", "black hair")
+        ):
+            if not any(t in low for t in ("ginger", "redhead", "auburn", "red hair")):
                 return True
     if "long" in hair and any(
         h in low for h in ("pixie", "buzz cut", "short bob", "crew cut")
     ):
         return True
+    if ("short" in hair or "pixie" in hair) and any(
+        h in low for h in ("long hair", "long wavy", "flowing hair")
+    ):
+        return True
 
+    # DNA gender via SigLIP (critical for hands/behind where titles are weak)
+    if gender in ("female", "male"):
+        try:
+            sim_f, sim_m = gender_cosine_pair(image)
+            if gender == "female" and sim_m > sim_f + GENDER_LOCK_MARGIN:
+                return True
+            if gender == "male" and sim_f > sim_m + GENDER_LOCK_MARGIN:
+                return True
+        except Exception:
+            pass
+        # Hands close-ups: feminine nails vs masculine hands
+        if handsish:
+            try:
+                fem, masc = attribute_cosine_pair(
+                    image, FEMININE_HANDS_PROMPT, MASCULINE_HANDS_PROMPT
+                )
+                if gender == "male" and fem > masc + GENDER_LOCK_MARGIN:
+                    return True
+                if gender == "female" and masc > fem + GENDER_LOCK_MARGIN:
+                    return True
+            except Exception:
+                pass
+
+    # Hair color/length — on hands frames hair is often at edges; still drop
+    # clear color clashes (fixes auburn DNA + dirty-blonde hands selfies).
     color_pair = _dna_hair_color_prompts(character_dna)
     if color_pair:
         want, reject = color_pair
@@ -1143,19 +1486,26 @@ def attribute_mismatches_dna(
             score_want, score_reject = attribute_cosine_pair(
                 image, want, reject
             )
-            if score_reject > score_want:
+            if handsish:
+                # Only hard-drop clear opposite colors (avoid emptying pool)
+                if score_reject > score_want + ATTR_COLOR_MARGIN:
+                    return True
+            elif score_want < score_reject + ATTR_COLOR_MARGIN:
                 return True
         except Exception:
             pass
+
+    if handsish:
+        return False
 
     length_pair = _dna_hair_length_prompts(character_dna)
     if length_pair:
         want_l, reject_l = length_pair
         try:
-            score_longish, score_shortish = attribute_cosine_pair(
+            score_want_l, score_reject_l = attribute_cosine_pair(
                 image, want_l, reject_l
             )
-            if score_shortish > score_longish:
+            if score_want_l < score_reject_l + ATTR_LENGTH_MARGIN:
                 return True
         except Exception:
             pass
@@ -1171,13 +1521,10 @@ def apply_attribute_lock_filter(
     query: str = "",
 ) -> tuple[list[CandidateImage], int]:
     """
-    Hard attribute gate when character_dna is set AND the slide/candidate
-    looks personish. Object-only slides skip hair SigLIP.
+    Hard attribute gate when character_dna is set.
+    Object-only slides still check per-image if a person is visible.
     """
     if not character_dna or not candidates:
-        return candidates, 0
-    # Whole-slide skip for pure environment queries
-    if query and not _query_is_personish(query):
         return candidates, 0
     kept: list[CandidateImage] = []
     dropped = 0
@@ -1218,33 +1565,47 @@ def infer_carousel_gender(image: Image.Image) -> str:
 
 
 def gender_mismatches_lock(
-    image: Image.Image, carousel_gender: str, title: str = ""
+    image: Image.Image,
+    carousel_gender: str,
+    title: str = "",
+    *,
+    query: str = "",
 ) -> bool:
     """
     True = drop candidate: opposite gender attributes clearly dominate.
     female lock -> drop if sim_male > sim_female + margin
     male lock -> drop if sim_female > sim_male + margin
+    Also drops feminine-nail hand closeups under male lock.
     """
     g = (carousel_gender or "").strip().lower()
     if g not in ("female", "male"):
         return False
     low = (title or "").lower()
-    if g == "female" and any(
-        h in low for h in ("man ", " men", "guy ", "male ", "boyfriend", "husband")
-    ):
+    if g == "female" and any(h in low for h in _MALE_TITLE_HINTS):
         return True
-    if g == "male" and any(
-        h in low
-        for h in ("woman", "girl ", "female", "girlfriend", "wife", "ladies")
-    ):
+    if g == "male" and any(h in low for h in _FEMALE_TITLE_HINTS):
         return True
     try:
         sim_f, sim_m = gender_cosine_pair(image)
-        if g == "female":
-            return sim_m > sim_f + GENDER_LOCK_MARGIN
-        return sim_f > sim_m + GENDER_LOCK_MARGIN
+        if g == "female" and sim_m > sim_f + GENDER_LOCK_MARGIN:
+            return True
+        if g == "male" and sim_f > sim_m + GENDER_LOCK_MARGIN:
+            return True
     except Exception:
-        return False
+        pass
+    # Hands / nail closeups under male DNA
+    if g == "male" and (
+        _query_is_handsish(title) or _query_is_handsish(query)
+    ):
+        try:
+            fem, masc = attribute_cosine_pair(
+                image, FEMININE_HANDS_PROMPT, MASCULINE_HANDS_PROMPT
+            )
+            if fem > masc + GENDER_LOCK_MARGIN:
+                return True
+        except Exception:
+            pass
+    return False
 
 
 def looks_like_frontal_face(image: Image.Image, title: str = "") -> bool:
@@ -1272,17 +1633,21 @@ def apply_gender_lock_filter(
     carousel_gender: str | None,
     *,
     slide_index: int = 0,
+    query: str = "",
 ) -> tuple[list[CandidateImage], int]:
     """
-    Slides 2..N: drop opposite-gender attributes vs slide-1 lock.
-    Returns (kept, dropped_count). Slide 1 is never gender-filtered.
+    All slides: drop opposite-gender attributes vs DNA / slide-1 lock.
+    (Previously skipped slide 1 — that let male DNA start with a female hook.)
     """
-    if slide_index <= 0 or not carousel_gender or not candidates:
+    if not carousel_gender or not candidates:
         return candidates, 0
     kept: list[CandidateImage] = []
     dropped = 0
     for c in candidates:
-        if gender_mismatches_lock(c.image, carousel_gender, c.title):
+        q = query or getattr(c, "query", "") or ""
+        if gender_mismatches_lock(
+            c.image, carousel_gender, c.title, query=q
+        ):
             dropped += 1
             c.is_relevant = False
             c.relevance_reason = (
@@ -1343,15 +1708,25 @@ def _filter_consistency_gates(
     )
     out, _ = apply_no_faces_body_filter(out, slide_index=slide_index)
     out, _ = apply_gender_lock_filter(
-        out, carousel_gender, slide_index=slide_index
+        out, carousel_gender, slide_index=slide_index, query=query
     )
     return out
 
 
 def title_looks_like_junk(title: str) -> bool:
-    """True если в названии/тегах wallpaper / gradient / vector / illustration."""
+    """True если в названии/тегах wallpaper / gradient / org-pantry / product pack."""
     low = (title or "").lower()
-    return any(term in low for term in JUNK_TITLE_TERMS)
+    if any(term in low for term in JUNK_TITLE_TERMS):
+        return True
+    if any(term in low for term in _CONFESSION_VIBE_BAN_TITLE):
+        return True
+    return False
+
+
+def title_looks_like_org_or_product(title: str) -> bool:
+    """Org pantry / brand pack shot — not confession UGC."""
+    low = (title or "").lower()
+    return any(term in low for term in _CONFESSION_VIBE_BAN_TITLE)
 
 
 def looks_like_letterbox_wallpaper(image: Image.Image) -> bool:
@@ -1426,16 +1801,69 @@ def looks_like_flat_gradient(image: Image.Image) -> bool:
         return False
 
 
-def is_junk_candidate_image(image: Image.Image, title: str = "") -> bool:
-    """Pillow + title: обои / градиенты / виджеты / векторный мусор до локального вкуса."""
+def looks_like_low_quality(image: Image.Image, *, bytes_len: int = 0) -> bool:
+    """
+    Soft/noisy/tiny phone dumps we never want in a carousel.
+    - short side too small
+    - tiny file (heavy compress / icon)
+    - extreme blur (Laplacian variance)
+    - near-uniform mush
+    """
+    try:
+        import numpy as np
+
+        img = image.convert("RGB")
+        w, h = img.size
+        short = min(w, h)
+        if short < 480:
+            return True
+        if w * h < 480 * 640:
+            return True
+        if bytes_len and bytes_len < 18_000:
+            return True
+
+        # Blur via Laplacian variance on downscaled gray
+        small = img.resize((320, 320), Image.Resampling.BILINEAR)
+        gray = np.asarray(small.convert("L"), dtype=np.float32)
+        # 3x3 Laplacian kernel
+        lap = (
+            -4 * gray
+            + np.roll(gray, 1, 0)
+            + np.roll(gray, -1, 0)
+            + np.roll(gray, 1, 1)
+            + np.roll(gray, -1, 1)
+        )
+        var = float(lap.var())
+        if var < 18.0:  # very soft / out of focus
+            return True
+        if var < 28.0 and float(gray.std()) < 28.0:
+            return True  # soft + flat = mush
+        return False
+    except Exception:
+        return False
+
+
+def is_junk_candidate_image(
+    image: Image.Image, title: str = "", *, bytes_len: int = 0
+) -> bool:
+    """Pillow + title: обои / градиенты / виджеты / studio-stock / low-quality."""
     if title_looks_like_junk(title):
         return True
     if looks_like_letterbox_wallpaper(image):
         return True
     if looks_like_flat_gradient(image):
         return True
-    return False
+    if looks_like_low_quality(image, bytes_len=bytes_len):
+        return True
+    try:
+        from core.ugc_filter import stock_pro_heuristic_penalty
 
+        # Hard studio white / airbrush — never keep even in completion
+        if stock_pro_heuristic_penalty(image) >= 0.34:
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def _board_text(obj: dict[str, Any]) -> str:
@@ -1648,9 +2076,11 @@ def _pin_from_obj(obj: dict[str, Any]) -> PinMeta | None:
     )
     title = re.sub(r"\s+", " ", str(title)).strip()[:80]
 
-    # Официальная метка Pinterest ИЛИ текстовые маркеры скрытого ИИ
+    # Официальная метка Pinterest ИЛИ текстовые маркеры скрытого ИИ / retail junk
     is_ai = _ai_flag_from_obj(obj)
     if is_ai is not True and _text_looks_like_ai(obj):
+        is_ai = True
+    if is_ai is not True and title_looks_like_junk(_pin_text_blob(obj)):
         is_ai = True
 
     return PinMeta(
@@ -1805,7 +2235,8 @@ def dedupe_carousel_pools(
     """
     Уникальные pin_id на позиции selected_index между слайдами карусели.
     Если #1 занят другим слайдом — двигаем следующий свободный alt вперёд.
-    Пустые пулы не трогаем.
+    Дубль на selected ЗАПРЕЩЁН: если свободного pin нет — пустой пул
+    (caller обязан guarantee/refill), а не повтор того же кадра.
     """
     if not pools:
         return pools
@@ -1816,7 +2247,6 @@ def dedupe_carousel_pools(
             out.append([])
             continue
         ordered = list(pool)
-        # выбранный сначала, потом остальные
         sel = max(0, min(int(selected_index), len(ordered) - 1))
         ranked = [ordered[sel]] + [
             c for i, c in enumerate(ordered) if i != sel
@@ -1831,19 +2261,15 @@ def dedupe_carousel_pools(
                 claimed.add(pid)
             break
         if pick_i is None:
-            # все pin уже заняты — оставляем как есть, но логируем
             print(
-                f"[WARNING] dedupe: нет свободного pin, "
-                f"оставляю дубль {ranked[0].pin_id}"
+                f"[WARNING] dedupe: нет свободного pin "
+                f"(все заняты другими слайдами) — пустой пул, "
+                f"не оставляю дубль {ranked[0].pin_id}"
             )
-            pick_i = 0
-            pid = str(ranked[0].pin_id or "")
-            if pid:
-                claimed.add(pid)
-        # переставляем: выбранный уникальный -> [0]
+            out.append([])
+            continue
         chosen = ranked[pick_i]
         rest = [c for i, c in enumerate(ranked) if i != pick_i]
-        # остальное тоже чистим от уже claimed (мягко)
         rest_unique = []
         for c in rest:
             pid = str(c.pin_id or "")
@@ -1853,7 +2279,6 @@ def dedupe_carousel_pools(
             if pid:
                 claimed.add(pid)
         new_pool = [chosen] + rest_unique
-        # если выкинули слишком много — вернём хвост ranked без chosen
         if len(new_pool) < min(2, len(ordered)):
             for c in ranked:
                 if c is chosen:
@@ -1862,6 +2287,16 @@ def dedupe_carousel_pools(
                     new_pool.append(c)
         out.append(new_pool)
     return out
+
+
+def dedupe_selected_across_slides(
+    pools: list[list[CandidateImage]],
+) -> list[list[CandidateImage]]:
+    """
+    После reorder (color harmony): гарантировать уникальный pin на [0]
+    между слайдами. Дубликаты на selected — hard fail → swap с alts.
+    """
+    return dedupe_carousel_pools(pools, selected_index=0)
 
 
 # ---------------------------------------------------------------------------
@@ -1873,7 +2308,7 @@ class PinterestHarvester:
         self._client = httpx.Client(
             timeout=httpx.Timeout(
                 REQUEST_TIMEOUT,
-                connect=min(12.0, REQUEST_TIMEOUT),
+                connect=min(CONNECT_TIMEOUT, REQUEST_TIMEOUT),
                 read=REQUEST_TIMEOUT,
                 write=REQUEST_TIMEOUT,
                 pool=REQUEST_TIMEOUT,
@@ -1999,6 +2434,24 @@ class PinterestHarvester:
             self.timing_siglip_sec += max(0.0, float(siglip))
 
     def _status(self, msg: str) -> None:
+        text = str(msg or "")
+        # Windows cp1251 consoles choke on ↔ × — … etc.
+        for a, b in (
+            ("\u2194", "<->"),
+            ("\u00d7", "x"),
+            ("\u2192", "->"),
+            ("\u2014", "-"),
+            ("\u2013", "-"),
+            ("\u2026", "..."),
+            ("\u2212", "-"),
+            ("\u00ab", "\""),
+            ("\u00bb", "\""),
+        ):
+            text = text.replace(a, b)
+        try:
+            self._on_status(text)
+        except UnicodeEncodeError:
+            self._on_status(text.encode("ascii", "replace").decode("ascii"))
         self._on_status(msg)
 
     def warm(self) -> None:
@@ -2034,7 +2487,7 @@ class PinterestHarvester:
                 self._client = httpx.Client(
                     timeout=httpx.Timeout(
                         REQUEST_TIMEOUT,
-                        connect=min(12.0, REQUEST_TIMEOUT),
+                        connect=min(CONNECT_TIMEOUT, REQUEST_TIMEOUT),
                         read=REQUEST_TIMEOUT,
                         write=REQUEST_TIMEOUT,
                         pool=REQUEST_TIMEOUT,
@@ -2135,7 +2588,10 @@ class PinterestHarvester:
         # Отдельный клиент — filter_ai параллельный, без блокировки search
         try:
             with httpx.Client(
-                timeout=httpx.Timeout(REQUEST_TIMEOUT, connect=REQUEST_TIMEOUT),
+                timeout=httpx.Timeout(
+                    REQUEST_TIMEOUT,
+                    connect=min(CONNECT_TIMEOUT, REQUEST_TIMEOUT),
+                ),
                 follow_redirects=True,
                 transport=httpx.HTTPTransport(retries=MAX_NETWORK_RETRIES),
             ) as client:
@@ -2299,7 +2755,7 @@ class PinterestHarvester:
                 img = img.convert("RGB")
             except Exception:
                 return None
-            if is_junk_candidate_image(img, pin.title):
+            if is_junk_candidate_image(img, pin.title, bytes_len=len(body)):
                 return None
             return CandidateImage(
                 pin_id=pin.pin_id,
@@ -2377,13 +2833,12 @@ class PinterestHarvester:
         visual_scene: str = "",
     ) -> list[CandidateImage]:
         """
-        SigLIP text↔image: проставить text_relevance ВСЕМ (без hard-wipe пула).
-        Якорь = visual_scene (физика кадра), не абстрактный text слайда.
+        SigLIP text↔image: max(scene_anchor, vibe_anchor) per image.
         Отбор победителя по SELECT_RELEVANCE_MIN — в judge_and_filter.
         """
         if not candidates:
             return []
-        score_text = build_relevance_text(
+        anchors = build_relevance_texts(
             slide_text, query, visual_scene=visual_scene
         )
         if (
@@ -2396,16 +2851,21 @@ class PinterestHarvester:
                 cand.text_relevance_scored = False
             return candidates
 
+        label = " | ".join(a[:36] for a in anchors)
         self._status(
-            f"Смысл text↔image («{score_text[:48]}»): оценка {len(candidates)}…"
+            f"Смысл text↔image («{label}»): оценка {len(candidates)}…"
         )
         t0 = time.perf_counter()
         try:
             from core.taste_embedder import get_embedder
 
-            scores = get_embedder().compute_text_image_relevances(
-                score_text, [c.image for c in candidates]
-            )
+            emb = get_embedder()
+            images = [c.image for c in candidates]
+            best_scores = [0.0] * len(candidates)
+            for anchor in anchors:
+                scores = emb.compute_text_image_relevances(anchor, images)
+                for i, score in enumerate(scores):
+                    best_scores[i] = max(best_scores[i], float(score))
         except Exception as exc:
             self._add_timing(siglip=time.perf_counter() - t0)
             self._status(
@@ -2416,7 +2876,7 @@ class PinterestHarvester:
                 cand.text_relevance_scored = False
             return candidates
 
-        for cand, score in zip(candidates, scores):
+        for cand, score in zip(candidates, best_scores):
             cand.text_relevance = float(score)
             cand.text_relevance_scored = True
         self._add_timing(siglip=time.perf_counter() - t0)
@@ -2428,6 +2888,7 @@ class PinterestHarvester:
             f"Смысл: scored {len(candidates)}, "
             f"best={best:.0%}, below_select_floor={low_n} "
             f"(<{int(round(SELECT_RELEVANCE_MIN * 100))}%)"
+            + (f" · anchors={len(anchors)}" if len(anchors) > 1 else "")
         )
         return candidates
 
@@ -2488,6 +2949,12 @@ class PinterestHarvester:
         """Taste-скоры для всех кандидатов (без hard-wipe пула)."""
         if not candidates:
             return []
+        if not TASTE_ENABLED:
+            for cand in candidates:
+                cand.taste_score = 0.5
+                cand.taste_scored = False
+            self._status("Вкус: DISABLED (experiment)")
+            return candidates
         from core.taste_classifier import get_taste_classifier
 
         clf = get_taste_classifier()
@@ -2519,6 +2986,106 @@ class PinterestHarvester:
         best = max(c.taste_score for c in candidates)
         self._status(f"Вкус: scored {len(candidates)}, лучший {best:.0%}")
         return candidates
+
+    def _apply_borderline_vision(
+        self,
+        candidates: list[CandidateImage],
+        *,
+        visual_scene: str = "",
+        query: str = "",
+        slide_text: str = "",
+    ) -> int:
+        """
+        Soft/vibe UGC band cannot auto-pass: moondream KEEP required.
+        Returns number of borderline frames dropped.
+        """
+        if not BORDERLINE_VISION_ENABLED or not candidates:
+            return 0
+        borderline = [
+            c
+            for c in candidates
+            if getattr(c, "is_relevant", False)
+            and ugc_is_borderline(
+                float(getattr(c, "ugc_score", 0) or 0),
+                float(getattr(c, "text_relevance", 0) or 0),
+                visual_scene=visual_scene,
+                query=query,
+                slide_text=slide_text,
+            )
+        ]
+        if not borderline:
+            return 0
+        borderline.sort(
+            key=lambda c: float(getattr(c, "combined_score", 0) or 0),
+            reverse=True,
+        )
+        to_check = borderline[: max(1, BORDERLINE_VISION_MAX)]
+        # Unchecked extras beyond cap: fail-closed DROP (don't auto-pass soft)
+        dropped = 0
+        for c in borderline[len(to_check) :]:
+            c.is_relevant = False
+            c.relevance_reason = "borderline_vision_cap DROP"
+            dropped += 1
+
+        self._status(
+            f"Взгляд (пограничный UGC): {len(to_check)} кадров через vision…"
+        )
+        try:
+            from core.local_gate import vision_borderline_is_live
+        except Exception as exc:
+            print(f"[VISION] import fail: {exc}")
+            if BORDERLINE_VISION_FAIL_CLOSED:
+                for c in to_check:
+                    c.is_relevant = False
+                    c.relevance_reason = "borderline_vision offline DROP"
+                    dropped += 1
+            return dropped
+
+        for c in to_check:
+            result = vision_borderline_is_live(
+                c.image,
+                scene=visual_scene or query,
+                slide_text=slide_text,
+            )
+            pid = str(getattr(c, "pin_id", "") or "")[-8:]
+            if not result.get("ok"):
+                if BORDERLINE_VISION_FAIL_CLOSED:
+                    c.is_relevant = False
+                    c.relevance_reason = (
+                        f"borderline_vision unavailable DROP "
+                        f"({result.get('why')})"
+                    )
+                    dropped += 1
+                    print(
+                        f"  [VISION] {pid} ugc={c.ugc_score:.0%} "
+                        f"OFFLINE→DROP",
+                        flush=True,
+                    )
+                else:
+                    c.relevance_reason = "single_pass_ugc_soft (vision skip)"
+                continue
+            keep = bool(result.get("keep"))
+            why = str(result.get("why") or "")[:60]
+            score = float(result.get("score") or 0)
+            if keep:
+                c.is_relevant = True
+                c.relevance_reason = f"vision_keep {score:.0f}: {why}"
+                c.selection_mode = "borderline_vision"
+                print(
+                    f"  [VISION] {pid} ugc={c.ugc_score:.0%} KEEP "
+                    f"{score:.0f} · {why}",
+                    flush=True,
+                )
+            else:
+                c.is_relevant = False
+                c.relevance_reason = f"vision_drop {score:.0f}: {why}"
+                dropped += 1
+                print(
+                    f"  [VISION] {pid} ugc={c.ugc_score:.0%} DROP "
+                    f"{score:.0f} · {why}",
+                    flush=True,
+                )
+        return dropped
 
     async def judge_and_filter(
         self,
@@ -2590,6 +3157,7 @@ class PinterestHarvester:
         ugc_drop = 0
         taste_drop = 0
         rel_drop = 0
+        ugc_soft_n = 0
         for cand in pre:
             taste_v = (
                 float(cand.taste_score)
@@ -2602,9 +3170,23 @@ class PinterestHarvester:
                 float(getattr(cand, "harmony_score", 100.0) or 100.0),
                 taste=taste_v,
             )
-            ugc_ok = float(cand.ugc_score) >= UGC_HARD_FLOOR
+            rel_v = float(cand.text_relevance)
+            ugc_v = float(cand.ugc_score)
+            ugc_ok = ugc_eligible(
+                ugc_v,
+                rel_v,
+                visual_scene=visual_scene,
+                query=query,
+                slide_text=slide_text,
+            )
             taste_ok = float(cand.taste_score) >= TASTE_HARD_FLOOR
-            rel_ok = float(cand.text_relevance) >= SELECT_RELEVANCE_MIN
+            rel_ok = rel_v >= SELECT_RELEVANCE_MIN
+            if (
+                ugc_ok
+                and ugc_v < UGC_HARD_FLOOR
+                and rel_v >= UGC_SOFT_REL_MIN
+            ):
+                ugc_soft_n += 1
             if not ugc_ok:
                 ugc_drop += 1
                 cand.is_relevant = False
@@ -2625,39 +3207,101 @@ class PinterestHarvester:
                 )
             else:
                 cand.is_relevant = True
-                cand.relevance_reason = "single_pass"
+                cand.relevance_reason = (
+                    "single_pass_ugc_soft"
+                    if ugc_v < UGC_HARD_FLOOR
+                    else "single_pass"
+                )
 
-        if ugc_drop or taste_drop or rel_drop:
+        vision_drop = self._apply_borderline_vision(
+            pre,
+            visual_scene=visual_scene,
+            query=query,
+            slide_text=slide_text,
+        )
+
+        if ugc_drop or taste_drop or rel_drop or ugc_soft_n or vision_drop:
             self._status(
                 f"Санитария: ugc<{int(round(UGC_HARD_FLOOR * 100))}%×{ugc_drop}, "
                 f"taste<{int(round(TASTE_HARD_FLOOR * 100))}%×{taste_drop}, "
                 f"rel<{int(round(SELECT_RELEVANCE_MIN * 100))}%×{rel_drop}"
+                + (
+                    f", ugc_soft×{ugc_soft_n}"
+                    if ugc_soft_n
+                    else ""
+                )
+                + (
+                    f", vision_drop×{vision_drop}"
+                    if vision_drop
+                    else ""
+                )
             )
 
         eligible = [
             c
             for c in pre
-            if float(c.ugc_score) >= UGC_HARD_FLOOR
+            if ugc_eligible(
+                float(c.ugc_score),
+                float(c.text_relevance),
+                visual_scene=visual_scene,
+                query=query,
+                slide_text=slide_text,
+            )
             and float(c.taste_score) >= TASTE_HARD_FLOOR
             and float(c.text_relevance) >= SELECT_RELEVANCE_MIN
+            and bool(getattr(c, "is_relevant", False))
         ]
         if not eligible:
-            self._status(
-                f"Ранг: 0 selectable "
-                f"(ugc≥{UGC_HARD_FLOOR:.0%} · taste≥{TASTE_HARD_FLOOR:.0%} · "
-                f"rel≥{SELECT_RELEVANCE_MIN:.0%}) из {len(pre)}"
-            )
-            return []
+            # Soft-rel: only when contract allows quality surrender
+            if SOFT_REL_ENABLED:
+                soft = [
+                    c
+                    for c in pre
+                    if ugc_eligible(
+                        float(c.ugc_score),
+                        float(c.text_relevance),
+                        visual_scene=visual_scene,
+                        query=query,
+                        slide_text=slide_text,
+                    )
+                    and float(c.taste_score) >= TASTE_HARD_FLOOR
+                    and float(c.text_relevance) >= SOFT_REL_FLOOR
+                    and bool(getattr(c, "is_relevant", False))
+                ]
+                if soft:
+                    soft.sort(key=lambda c: c.combined_score, reverse=True)
+                    for c in soft:
+                        c.is_relevant = True
+                        c.relevance_reason = "soft_rel (ugc+taste ok)"
+                        c.selection_mode = "soft_rel_fallback"
+                    self._status(
+                        f"Ранг: soft-rel fallback {len(soft)} "
+                        f"(ugc≥{UGC_HARD_FLOOR:.0%} · rel soft) "
+                        f"best={soft[0].combined_score:.0%}"
+                    )
+                    eligible = soft
+            if not eligible:
+                self._status(
+                    f"Ранг: 0 selectable "
+                    f"(ugc≥{UGC_HARD_FLOOR:.0%} · taste≥{TASTE_HARD_FLOOR:.0%} · "
+                    f"rel≥{SELECT_RELEVANCE_MIN:.0%}"
+                    f"{'' if SOFT_REL_ENABLED else ' · STRICT contract'}) "
+                    f"из {len(pre)}"
+                )
+                return []
 
         eligible.sort(key=lambda c: c.combined_score, reverse=True)
         winner = eligible[0]
-        winner.selection_mode = "single_pass_argmax"
+        if "vision_keep" in (winner.relevance_reason or ""):
+            winner.selection_mode = "borderline_vision"
+        else:
+            winner.selection_mode = "single_pass_argmax"
         kept = [winner] + eligible[1:]
         self._status(
             f"Ранг: top final={winner.combined_score:.0%} "
             f"(UGC {winner.ugc_score:.0%} · вкус {winner.taste_score:.0%} · "
             f"смысл {winner.text_relevance:.0%}) "
-            f"[single_pass_argmax · pool={len(kept)}/{len(pre)}]"
+            f"[{winner.selection_mode} · pool={len(kept)}/{len(pre)}]"
         )
         return kept
 
@@ -2788,16 +3432,21 @@ class PinterestHarvester:
         try:
             from core.taste_classifier import get_taste_classifier
 
-            clf = get_taste_classifier()
-            if clf.is_trained:
-                scores = clf.predict_taste_scores([c.image for c in pre])
-                for c, s in zip(pre, scores):
-                    c.taste_score = float(s)
-                    c.taste_scored = True
-            else:
+            if not TASTE_ENABLED:
                 for c in pre:
                     c.taste_score = 0.5
                     c.taste_scored = False
+            else:
+                clf = get_taste_classifier()
+                if clf.is_trained:
+                    scores = clf.predict_taste_scores([c.image for c in pre])
+                    for c, s in zip(pre, scores):
+                        c.taste_score = float(s)
+                        c.taste_scored = True
+                else:
+                    for c in pre:
+                        c.taste_score = 0.5
+                        c.taste_scored = False
         except Exception:
             for c in pre:
                 c.taste_score = 0.5
@@ -2846,18 +3495,39 @@ class PinterestHarvester:
         ]
         pool_for_pick = usable if usable else taste_ok
 
+        # Soft-band emergency keeps also need vision KEEP
+        for c in pool_for_pick:
+            c.is_relevant = True
+        self._apply_borderline_vision(
+            pool_for_pick,
+            visual_scene=visual_scene,
+            query=query,
+            slide_text=slide_text,
+        )
+
         guarded = [
             c
             for c in pool_for_pick
-            if float(c.ugc_score) >= EMERGENCY_UGC_FLOOR
+            if ugc_eligible(
+                float(c.ugc_score),
+                float(getattr(c, "text_relevance", 0.0) or 0.0),
+                visual_scene=visual_scene,
+                query=query,
+                slide_text=slide_text,
+            )
             and float(c.taste_score) >= EMERGENCY_TASTE_FLOOR
-            and float(getattr(c, "text_relevance", 0.0) or 0.0) >= EMERGENCY_REL_FLOOR
+            and float(getattr(c, "text_relevance", 0.0) or 0.0)
+            >= EMERGENCY_REL_FLOOR
+            and bool(getattr(c, "is_relevant", False))
         ]
         if guarded:
             guarded.sort(key=lambda c: c.combined_score, reverse=True)
             for c in guarded:
-                c.relevance_reason = "emergency keep (gates empty)"
-                c.selection_mode = "emergency_guarded"
+                if "vision_keep" in (c.relevance_reason or ""):
+                    c.selection_mode = "emergency_borderline_vision"
+                else:
+                    c.relevance_reason = "emergency keep (gates empty)"
+                    c.selection_mode = "emergency_guarded"
             top = guarded[: max(limit, 1)]
             print(
                 f"[WARNING] emergency-keep (guarded): беру {len(top)} из "
@@ -2869,28 +3539,15 @@ class PinterestHarvester:
             )
             return top
 
-        # Только среди taste≥floor — best по final (НЕ ниже 0.35 вкуса)
-        pool_for_pick.sort(key=lambda c: c.combined_score, reverse=True)
-        top = pool_for_pick[: max(limit, 1)]
-        for c in top:
-            if float(c.taste_score) < EMERGENCY_TASTE_FLOOR:
-                continue
-            c.relevance_reason = "emergency keep (best of pool)"
-            c.selection_mode = "emergency_best"
-        top = [
-            c
-            for c in top
-            if float(c.taste_score) >= EMERGENCY_TASTE_FLOOR
-        ]
-        if not top:
-            return []
+        # Не роняем пол UGC ради «хоть чего-то» — лучше пусто → guarantee/refill
         print(
-            f"[WARNING] emergency-keep (best): беру {len(top)} из {len(pool_for_pick)} "
-            f"(best final={top[0].combined_score:.0%} · "
-            f"ugc={top[0].ugc_score:.0%} · taste={top[0].taste_score:.0%} · "
-            f"rel={top[0].text_relevance:.0%})"
+            f"[WARNING] emergency-keep: 0 кадров с "
+            f"ugc≥{UGC_SOFT_FLOOR:.0%}(+rel≥{UGC_SOFT_REL_MIN:.0%})/"
+            f"{EMERGENCY_UGC_FLOOR:.0%} · "
+            f"taste≥{EMERGENCY_TASTE_FLOOR:.0%} "
+            f"из {len(pool_for_pick)} — пусто (без сток-bypass)"
         )
-        return top
+        return []
 
     def guarantee_at_least_one(
         self,
@@ -2901,53 +3558,100 @@ class PinterestHarvester:
         limit: int = 1,
         topic: str = "",
         visual_scene: str = "",
+        avoid_queries: set[str] | frozenset[str] | None = None,
+        searches_budget: int | None = None,
+        allow_soft: bool = False,
     ) -> tuple[list[CandidateImage], str]:
         """
-        Жёсткая гарантия: вернуть ≥1 скачанный кадр.
-        Сначала уважает hard-ban used_pins; ignore_used — только absolute last resort.
+        Vibe-rescue guarantee: NEW scene-angle queries only.
+        Never re-search queries already tried (empty > stock; vibe > empty).
+
+        allow_soft=True → completion-fill path (softer UGC floor, labeled).
         """
-        del topic
         slide_no = slide_index + 1
+        soft_ok = bool(allow_soft) or GUARANTEE_SOFT_ENABLED
+        soft_floor = (
+            COMPLETION_UGC_FLOOR if allow_soft else GUARANTEE_UGC_FLOOR
+        )
+        avoid: set[str] = {
+            (a or "").strip().lower()
+            for a in (avoid_queries or ())
+            if (a or "").strip()
+        }
+        pref = (preferred_query or "").strip()
+        if pref:
+            avoid.add(pref.lower())
+
+        from core.query_forge import style_pivot_queries, vibe_rescue_queries
+
+        budget = int(
+            GUARANTEE_MAX_SEARCHES
+            if searches_budget is None
+            else max(0, searches_budget)
+        )
+        # Prop/scene angles first; reserve ~half budget for style pivot later
+        prop_budget = max(1, budget - min(3, max(1, budget // 2))) if budget >= 2 else budget
+        ordered = vibe_rescue_queries(
+            slide_text=slide_text,
+            visual_scene=visual_scene,
+            topic=topic,
+            avoid=avoid,
+            max_n=max(prop_budget, 1),
+            include_style_pivot=False,
+        )
+        # Only if vibe dry AND preferred never searched — one shot
+        if not ordered and pref and pref.lower() not in {
+            (a or "").strip().lower() for a in (avoid_queries or ()) if a
+        }:
+            ordered = [pref]
+
         tried: list[str] = []
-        ordered: list[str] = []
-        if (preferred_query or "").strip():
-            ordered.append(preferred_query.strip())
-        try:
-            ordered.append(
-                situation_query_for_slide(
-                    slide_text,
-                    slide_index,
-                    visual_scene=visual_scene,
-                )
-            )
-        except Exception:
-            pass
-        if (visual_scene or "").strip():
-            try:
-                from core.llm_engine import search_query_from_visual_scene
+        seen_q: set[str] = set(avoid)
+        searches_left = budget
+        vibe_tried: list[str] = []
 
-                ordered.append(search_query_from_visual_scene(visual_scene))
-            except Exception:
-                pass
-        ordered.extend(LAST_RESORT_QUERIES)
-
-        seen_q: set[str] = set()
-
-        def _try_chain(*, ignore_used: bool) -> tuple[list[CandidateImage], str]:
-            for raw_q in ordered:
-                q = (
-                    finalize_photo_query(raw_q, slide_index, slide_text=slide_text)
-                    or raw_q
-                )
-                q = re.sub(r"\s+", " ", q).strip()
-                if not q or q.lower() in seen_q:
+        def _try_chain(
+            queries: list[str],
+            *,
+            ignore_used: bool,
+            max_n: int,
+            allow_repeat: bool = False,
+            selection_mode: str = "vibe_rescue",
+            reason: str = "vibe_rescue guarantee",
+            use_soft: bool = False,
+            skip_finalize: bool = False,
+        ) -> tuple[list[CandidateImage], str]:
+            nonlocal searches_left
+            local_seen: set[str] = set() if allow_repeat else set(seen_q)
+            n_done = 0
+            soft_this = bool(use_soft) and soft_ok
+            for raw_q in queries:
+                if searches_left <= 0 or n_done >= max_n:
+                    break
+                if skip_finalize:
+                    q = re.sub(r"\s+", " ", (raw_q or "").strip())
+                else:
+                    q = (
+                        finalize_photo_query(
+                            raw_q, slide_index, slide_text=slide_text
+                        )
+                        or raw_q
+                    )
+                    q = re.sub(r"\s+", " ", q).strip()
+                if not q or q.lower() in local_seen:
                     continue
-                seen_q.add(q.lower())
+                local_seen.add(q.lower())
                 tried.append(q)
+                if not ignore_used:
+                    vibe_tried.append(q)
+                searches_left -= 1
+                n_done += 1
                 mode = "ignore_used" if ignore_used else "fresh-only"
+                tag = selection_mode
                 print(
-                    f"[GUARANTEE] Слайд {slide_no}: last-resort search «{q}» "
-                    f"({mode})…"
+                    f"[GUARANTEE] Слайд {slide_no}: {tag} «{q}» "
+                    f"({mode}, left={searches_left}"
+                    f"{', soft' if soft_this else ''})…"
                 )
                 try:
                     cands, _prog = self.harvest_for_query(
@@ -2955,7 +3659,7 @@ class PinterestHarvester:
                         limit=max(limit, 3),
                         slide_text=slide_text,
                         slide_index=slide_index,
-                        allow_broaden=True,
+                        allow_broaden=False,
                         ignore_used=ignore_used,
                         apply_score=False,
                         _allow_emergency=True,
@@ -2966,6 +3670,31 @@ class PinterestHarvester:
                     continue
                 if not cands:
                     continue
+                cands = cands[:RESCUE_DOWNLOAD_CAP]
+                # Score UGC/rel so soft floors can apply
+                try:
+                    self._apply_text_relevance_gate(
+                        cands,
+                        slide_text=slide_text,
+                        query=q,
+                        visual_scene=visual_scene,
+                    )
+                except Exception:
+                    pass
+                try:
+                    from core.ugc_filter import get_ugc_filter
+
+                    scores = get_ugc_filter().get_ugc_scores(
+                        [c.image for c in cands]
+                    )
+                    for c, s in zip(cands, scores):
+                        c.ugc_score = float(s)
+                        c.ugc_scored = True
+                except Exception:
+                    for c in cands:
+                        if not getattr(c, "ugc_scored", False):
+                            c.ugc_score = 0.5
+                            c.ugc_scored = True
                 kept = self.rank_pool_emergency(
                     cands,
                     slide_text=slide_text,
@@ -2973,31 +3702,281 @@ class PinterestHarvester:
                     limit=max(limit, 1),
                     visual_scene=visual_scene,
                 )
-                if not kept:
-                    kept = list(cands[: max(limit, 1)])
-                for c in kept:
-                    c.relevance_reason = "last_resort guarantee"
-                    c.selection_mode = "guarantee"
-                return kept, q
+                if kept:
+                    for c in kept:
+                        c.relevance_reason = reason
+                        c.selection_mode = selection_mode
+                    return kept, q
+                if not soft_this:
+                    print(
+                        f"[GUARANTEE] «{q}»: empty under STRICT "
+                        f"(need ugc≥{EMERGENCY_UGC_FLOOR:.0%} · "
+                        f"rel≥{EMERGENCY_REL_FLOOR:.0%})"
+                    )
+                    continue
+                scored = [
+                    c
+                    for c in cands
+                    if float(getattr(c, "ugc_score", 0) or 0) >= soft_floor
+                    and float(getattr(c, "text_relevance", 0) or 0)
+                    >= (COMPLETION_REL_FLOOR if allow_soft else EMERGENCY_REL_FLOOR)
+                ]
+                if not scored:
+                    # last ditch: best ugc in downloaded pool
+                    scored = sorted(
+                        cands,
+                        key=lambda c: float(getattr(c, "ugc_score", 0) or 0),
+                        reverse=True,
+                    )[: max(limit, 1)]
+                    if scored and float(getattr(scored[0], "ugc_score", 0) or 0) < 0.22:
+                        scored = []
+                if scored:
+                    scored.sort(
+                        key=lambda c: float(getattr(c, "ugc_score", 0) or 0),
+                        reverse=True,
+                    )
+                    top = scored[: max(limit, 1)]
+                    for c in top:
+                        c.relevance_reason = (
+                            "completion_fill soft"
+                            if allow_soft
+                            else "guarantee soft ugc"
+                        )
+                        c.selection_mode = (
+                            "completion_fill" if allow_soft else "guarantee_soft"
+                        )
+                    print(
+                        f"[GUARANTEE] soft-keep ugc={top[0].ugc_score:.0%} "
+                        f"(floor {soft_floor:.0%}) «{q}»"
+                        f"{' [completion]' if allow_soft else ''}"
+                    )
+                    return top, q
+                print(
+                    f"[GUARANTEE] «{q}»: пуст даже soft "
+                    f"(ugc<{soft_floor:.0%}) — next vibe"
+                )
+            if not allow_repeat:
+                seen_q.update(local_seen)
             return [], ""
 
-        kept, win_q = _try_chain(ignore_used=False)
-        if kept:
-            return kept, win_q
-        # Absolute last resort — иначе карусель падает; всё равно логируем
-        print(
-            f"[GUARANTEE] Слайд {slide_no}: fresh-only пусто — "
-            f"absolute last-resort ignore_used"
-        )
-        seen_q.clear()
-        kept, win_q = _try_chain(ignore_used=True)
-        if kept:
-            return kept, win_q
-        print(
-            f"[GUARANTEE] Слайд {slide_no}: FAILED — 0 кадров после "
-            f"last-resort ({tried})"
-        )
+        if ordered and searches_left > 0:
+            kept, win_q = _try_chain(
+                ordered,
+                ignore_used=False,
+                max_n=prop_budget,
+                use_soft=False,
+            )
+            if kept:
+                return kept, win_q
+
+        # Style pivot: radical eased queries (coffee/hands/window) with HARD floors
+        # Better a strong on-brand mood frame than soft junk from the same prop.
+        if searches_left > 0:
+            pivot_avoid = set(seen_q) | {t.lower() for t in tried}
+            pivots = style_pivot_queries(
+                avoid=pivot_avoid,
+                max_n=max(searches_left, 1),
+                seed_text=f"{visual_scene} {slide_text} {topic}",
+                slide_text=slide_text,
+                visual_scene=visual_scene,
+                topic=topic,
+            )
+            if pivots:
+                print(
+                    f"[GUARANTEE] Слайд {slide_no}: style-pivot "
+                    f"({len(pivots)} eased queries, hard UGC)…"
+                )
+                kept, win_q = _try_chain(
+                    pivots,
+                    ignore_used=False,
+                    max_n=searches_left,
+                    selection_mode="style_pivot",
+                    reason="style_pivot eased frame",
+                    use_soft=False,
+                    skip_finalize=True,
+                )
+                if kept:
+                    return kept, win_q
+
+        if searches_left > 0 and vibe_tried:
+            print(
+                f"[GUARANTEE] Слайд {slide_no}: fresh-only пусто — "
+                f"1x ignore_used on best vibe"
+            )
+            kept, win_q = _try_chain(
+                vibe_tried[:1],
+                ignore_used=True,
+                max_n=1,
+                allow_repeat=True,
+                use_soft=soft_ok,
+            )
+            if kept:
+                return kept, win_q
+
+        # Soft pass only after prop + style-pivot hard fails (completion path)
+        if soft_ok and searches_left > 0:
+            soft_qs = style_pivot_queries(
+                avoid=set(seen_q) | {t.lower() for t in tried},
+                max_n=max(searches_left, 1),
+                seed_text=f"{visual_scene} {slide_text} {topic}",
+                slide_text=slide_text,
+                visual_scene=visual_scene,
+                topic=topic,
+            ) or vibe_tried[:1]
+            if soft_qs:
+                print(
+                    f"[GUARANTEE] Слайд {slide_no}: soft after pivot miss…"
+                )
+                kept, win_q = _try_chain(
+                    soft_qs,
+                    ignore_used=True,
+                    max_n=searches_left,
+                    allow_repeat=True,
+                    selection_mode="completion_fill",
+                    reason="completion_fill soft after pivot",
+                    use_soft=True,
+                    skip_finalize=True,
+                )
+                if kept:
+                    return kept, win_q
+
+        if not ordered and not tried:
+            print(
+                f"[GUARANTEE] Слайд {slide_no}: no vibe queries left "
+                f"(avoid={len(avoid)}) — empty slot"
+            )
+        else:
+            print(
+                f"[GUARANTEE] Слайд {slide_no}: FAILED — empty > stock "
+                f"(tried vibe={tried})"
+            )
         return [], ""
+
+    def force_any_candidate(
+        self,
+        *,
+        slide_text: str = "",
+        slide_index: int = 0,
+        topic: str = "",
+        visual_scene: str = "",
+        preferred_query: str = "",
+        limit: int = 1,
+    ) -> tuple[list[CandidateImage], str]:
+        """
+        Nuclear completion: MUST return a photo if Pinterest returns anything.
+        ignore_used + broaden + pick best non-junk by ugc (no floor).
+        """
+        slide_no = slide_index + 1
+        from core.query_forge import (
+            _extract_props,
+            _scene_nouns,
+            style_pivot_queries,
+            vibe_rescue_queries,
+        )
+
+        queries: list[str] = []
+        # Prefer radical eased frames before re-searching the failed prop
+        queries.extend(
+            style_pivot_queries(
+                avoid=set(),
+                max_n=5,
+                seed_text=f"{visual_scene} {slide_text} {topic}",
+                slide_text=slide_text,
+                visual_scene=visual_scene,
+                topic=topic,
+            )
+        )
+        if preferred_query:
+            queries.append(preferred_query)
+        queries.extend(
+            vibe_rescue_queries(
+                slide_text=slide_text,
+                visual_scene=visual_scene,
+                topic=topic,
+                avoid=set(),
+                max_n=3,
+                include_style_pivot=False,
+            )
+        )
+        for phrase in _extract_props(f"{visual_scene} {slide_text}", limit=3):
+            queries.append(phrase)
+        nouns = _scene_nouns(visual_scene or slide_text, limit=3)
+        if nouns:
+            queries.append(" ".join(nouns))
+        # Broad domestic fallbacks tied to confession niche
+        for fb in (
+            "messy kitchen night candid",
+            "snack counter phone photo",
+            "open fridge night phone",
+            "desk snacks evening",
+            "city window night phone",
+        ):
+            queries.append(fb)
+
+        seen: set[str] = set()
+        best: CandidateImage | None = None
+        best_q = ""
+        for raw in queries:
+            q = re.sub(r"\s+", " ", (raw or "").strip())
+            if not q or q.lower() in seen:
+                continue
+            seen.add(q.lower())
+            print(f"[NUCLEAR] Слайд {slide_no}: force «{q}»…")
+            try:
+                cands, _ = self.harvest_for_query(
+                    q,
+                    limit=max(limit, 4),
+                    slide_text=slide_text,
+                    slide_index=slide_index,
+                    allow_broaden=True,
+                    ignore_used=True,
+                    apply_score=False,
+                    _allow_emergency=True,
+                    visual_scene=visual_scene,
+                )
+            except Exception as exc:
+                print(f"[NUCLEAR] fail «{q}»: {exc}")
+                continue
+            if not cands:
+                continue
+            # score ugc
+            try:
+                from core.ugc_filter import get_ugc_filter
+
+                scores = get_ugc_filter().get_ugc_scores([c.image for c in cands])
+                for c, s in zip(cands, scores):
+                    c.ugc_score = float(s)
+                    c.ugc_scored = True
+            except Exception:
+                for c in cands:
+                    c.ugc_score = 0.45
+                    c.ugc_scored = True
+            alive = [
+                c
+                for c in cands
+                if not is_junk_candidate_image(c.image, getattr(c, "title", "") or "")
+            ]
+            pool = alive or list(cands)
+            pool.sort(
+                key=lambda c: float(getattr(c, "ugc_score", 0) or 0), reverse=True
+            )
+            top = pool[0]
+            if best is None or float(top.ugc_score) > float(best.ugc_score):
+                best = top
+                best_q = q
+            # Good enough — stop early
+            if float(top.ugc_score) >= 0.40:
+                break
+
+        if best is None:
+            print(f"[NUCLEAR] Слайд {slide_no}: Pinterest gave nothing usable")
+            return [], ""
+        best.selection_mode = "completion_nuclear"
+        best.relevance_reason = "nuclear fill — slot must not be empty"
+        print(
+            f"[NUCLEAR] Слайд {slide_no}: keep ugc={best.ugc_score:.0%} «{best_q}»"
+        )
+        return [best], best_q
 
     def _taste_fetch_limit(self, limit: int) -> int:
         """Запас под отсев — умеренный (скорость batch)."""
@@ -3064,7 +4043,7 @@ class PinterestHarvester:
                 pins_raw = self.search(q)
 
         if not pins_raw and do_broaden:
-            for alt_q in smart_broaden_queries(q, max_alts=5):
+            for alt_q in smart_broaden_queries(q, max_alts=1):
                 print(
                     f"[Слайд {slide_label}] Smart Broaden: «{q}» -> «{alt_q}»"
                 )
@@ -3133,14 +4112,16 @@ class PinterestHarvester:
             f"Скачивание ({DOWNLOAD_CONCURRENCY} потоков)… кандидатов: {len(kept)}"
         )
         fetch_limit = self._taste_fetch_limit(limit)
-        pool = kept[: max(fetch_limit, 10)]
+        # Rescue/guarantee path: smaller CDN pool (speed)
+        cap = RESCUE_DOWNLOAD_CAP if not do_broaden else max(fetch_limit, 10)
+        pool = kept[: min(cap, max(fetch_limit, 10))]
         raw_cands, dl_prog = asyncio.run(
             self._download_and_judge(
                 pool,
                 q,
                 limit,
                 text,
-                fetch_limit=fetch_limit,
+                fetch_limit=len(pool),
                 anchor_image=anchor_image,
                 apply_score=False,
                 visual_scene=scene,
@@ -3212,6 +4193,97 @@ class PinterestHarvester:
             speed_mbps=dl_prog.speed_mbps,
         )
 
+    def _search_select_pins(
+        self,
+        query: str,
+        *,
+        slide_text: str = "",
+        slide_index: int | None = None,
+        limit: int = CANDIDATES_PER_SLIDE,
+        allow_broaden: bool = True,
+        ignore_used: bool = False,
+        exclude_ids: set[str] | None = None,
+    ) -> tuple[list[PinMeta], str, int]:
+        """
+        Search + pin select + AI filter — NO CDN download.
+        Returns (pins, used_query, ai_rejected_count).
+        """
+        text = (slide_text or "").strip()
+        q = finalize_photo_query(
+            (query or "").strip(), slide_text=text
+        ) or (query or "").strip()
+        if not q:
+            return [], "", 0
+        exclude = exclude_ids or set()
+        slide_label = (slide_index + 1) if slide_index is not None else "?"
+
+        pins_raw = self.search(q)
+        if not pins_raw:
+            print(
+                f"[Слайд {slide_label}] Pinterest Search '{q}': "
+                f"сеть=0 -> warm + retry"
+            )
+            self.warm_session()
+            time.sleep(0.2)
+            q_soft = " ".join(
+                w
+                for w in re.split(r"\s+", q)
+                if w and w.lower() != "iphone"
+            ).strip() or q
+            soft_pins = self.search(q_soft, finalize=False)
+            if soft_pins:
+                pins_raw = soft_pins
+                q = q_soft
+            else:
+                time.sleep(0.2)
+                pins_raw = self.search(q)
+
+        if not pins_raw and allow_broaden:
+            for alt_q in smart_broaden_queries(q, max_alts=1):
+                print(
+                    f"[Слайд {slide_label}] Smart Broaden: «{q}» -> «{alt_q}»"
+                )
+                alt_pins = self.search(alt_q, finalize=False)
+                if alt_pins:
+                    pins_raw = alt_pins
+                    q = alt_q
+                    break
+                time.sleep(0.15)
+
+        if not pins_raw:
+            print(
+                f"[Слайд {slide_label}] Pinterest Search '{q}': 0 pins"
+            )
+            return [], q, 0
+
+        want = max(self._taste_fetch_limit(limit), 4)
+        pins, raw_count, dups_count = self._select_pins_avoiding_used(
+            pins_raw,
+            exclude=exclude,
+            ignore_used=ignore_used,
+            want=want,
+        )
+        pins = [p for p in pins if not is_fake_stub_pin_id(p.pin_id)]
+        try:
+            from core.photo_vault import drop_blacklisted_pins
+
+            pins, bl_n = drop_blacklisted_pins(pins)
+            if bl_n:
+                print(
+                    f"[Слайд {slide_label}] vault blacklist drop ×{bl_n}"
+                )
+        except Exception as exc:
+            print(f"[vault] filter skip: {exc}")
+
+        print(
+            f"[Слайд {slide_label}] Pinterest Search '{q}': "
+            f"сеть={raw_count}, dups={dups_count}, к отбору={len(pins)}"
+        )
+        if not pins:
+            return [], q, 0
+        kept, ai_rejected = self.filter_ai(pins)
+        return kept, q, ai_rejected
+
     def harvest_until_filled(
         self,
         primary_query: str,
@@ -3225,106 +4297,216 @@ class PinterestHarvester:
         max_attempts: int = MAX_QUERY_ATTEMPTS,
         apply_score: bool = True,
         visual_scene: str = "",
+        alt_queries: list[str] | None = None,
+        avoid_queries: set[str] | frozenset[str] | None = None,
+        search_budget: int | None = None,
     ) -> tuple[list[CandidateImage], HarvestProgress, str]:
         """
-        Один короткий primary-запрос (max_attempts=1).
-        Без candid/finsta/mood-цепочек.
+        Multi-query: search budgeted queries → merge pins → ONE CDN download.
+        On empty: vibe-rescue NEW angles (never re-search failed qs).
+        empty slot > stock photo.
         """
-        chain = build_fallback_queries(
-            primary_query,
-            slide_text,
-            index=slide_index,
-            topic=topic,
-        )
-        if not chain:
-            chain = [primary_query] if primary_query else ["coffee window"]
-        # Только primary — никаких candid-retry
-        del min_keep, max_attempts  # API-compat; цепочки отключены
-        chain = chain[:1]
+        del min_keep, max_attempts
         scene = (visual_scene or "").strip()
+        budget = int(
+            SLIDE_SEARCH_BUDGET if search_budget is None else max(0, search_budget)
+        )
+        primary = re.sub(r"\s+", " ", (primary_query or "").strip())
+        prior_avoid = {
+            (a or "").strip().lower()
+            for a in (avoid_queries or ())
+            if (a or "").strip()
+        }
+        chain: list[str] = []
+        if primary and primary.lower() not in prior_avoid:
+            chain.append(primary)
+        for aq in alt_queries or []:
+            a = re.sub(r"\s+", " ", (aq or "").strip())
+            if (
+                a
+                and a.lower() not in {c.lower() for c in chain}
+                and a.lower() not in prior_avoid
+            ):
+                chain.append(a)
+        if not chain:
+            chain = ["everyday indoor candid"]
 
-        collected: list[CandidateImage] = []
+        t0 = time.perf_counter()
+        # Multi-query diversifies — skip Smart Broaden (saves ≤5 searches)
+        broaden = len(chain) <= 1 and budget <= 2
+        merged_pins: list[PinMeta] = []
         seen_ids: set[str] = set()
         winning = chain[0]
         total_ai = 0
-        total_bytes = 0
-        t0 = time.perf_counter()
+        tried: list[str] = []
+        searches_used = 0
 
-        def _merge(cands: list[CandidateImage]) -> None:
-            for c in cands:
-                if c.pin_id in seen_ids:
-                    continue
-                seen_ids.add(c.pin_id)
-                collected.append(c)
-
-        q = chain[0]
-        self._status(f"Слайд {slide_index + 1}: «{q}»…")
-        print(f"[Слайд {slide_index + 1}] primary: '{q}'")
-        more, prog = self.harvest_for_query(
-            q,
-            limit=limit,
-            slide_text=slide_text,
-            slide_index=slide_index,
-            allow_broaden=True,
-            anchor_image=anchor_image,
-            ignore_used=False,
-            _ugc_candid_retry=True,  # блокирует legacy-retries
-            apply_score=apply_score,
-            visual_scene=scene,
-        )
-        total_ai += prog.ai_rejected
-        total_bytes += prog.bytes_total
-        _merge(more)
-        if collected:
-            winning = q
-        elif apply_score:
-            # Alternate query first (hard-ban kept); ignore_used только через guarantee
-            alts = build_fallback_queries(
-                q, slide_text, index=slide_index + 1, topic=topic
-            )
-            alt_q = next(
-                (a for a in alts if a and a.lower() != q.lower()),
-                "",
-            )
-            if alt_q:
+        for qi, q in enumerate(chain):
+            if searches_used >= budget:
                 print(
-                    f"[WARNING] Слайд {slide_index + 1}: пусто — "
-                    f"1× alt query «{alt_q}»…"
+                    f"[Слайд {slide_index + 1}] search budget "
+                    f"{budget} hit — skip remaining chain"
                 )
-                more, prog = self.harvest_for_query(
-                    alt_q,
-                    limit=limit,
-                    slide_text=slide_text,
-                    slide_index=slide_index,
-                    allow_broaden=True,
-                    anchor_image=anchor_image,
-                    ignore_used=False,
-                    _ugc_candid_retry=True,
-                    apply_score=apply_score,
-                    visual_scene=scene,
-                )
-                total_ai += prog.ai_rejected
-                total_bytes += prog.bytes_total
-                _merge(more)
-                if collected:
-                    winning = alt_q
-
-        # Last-resort: хоть 1 фото, иначе пустой слайд роняет карусель
-        if not collected:
-            g_kept, g_q = self.guarantee_at_least_one(
+                break
+            label = "primary" if qi == 0 else f"alt{qi}"
+            self._status(f"Слайд {slide_index + 1}: «{q}» ({label})…")
+            print(f"[Слайд {slide_index + 1}] {label}: '{q}'")
+            pins, used_q, ai_n = self._search_select_pins(
+                q,
                 slide_text=slide_text,
                 slide_index=slide_index,
-                preferred_query=winning or q,
-                limit=max(limit, 1),
-                topic=topic,
-                visual_scene=scene,
+                limit=limit,
+                allow_broaden=broaden and searches_used + 1 < budget,
+                ignore_used=False,
             )
-            if g_kept:
-                _merge(g_kept)
-                winning = g_q or winning
+            searches_used += 1
+            tried.append(used_q or q)
+            total_ai += ai_n
+            before = len(merged_pins)
+            for p in pins:
+                if p.pin_id in seen_ids:
+                    continue
+                seen_ids.add(p.pin_id)
+                merged_pins.append(p)
+            if len(merged_pins) > before:
+                if qi == 0 or before == 0:
+                    winning = used_q or q
+
+        collected: list[CandidateImage] = []
+        total_bytes = 0
+        if merged_pins:
+            pool = merged_pins[:MERGE_DOWNLOAD_CAP]
+            print(
+                f"[Слайд {slide_index + 1}] merge-download "
+                f"{len(pool)} pins (from {len(tried)} queries, "
+                f"cap={MERGE_DOWNLOAD_CAP})"
+            )
+            self._status(
+                f"Скачивание ({DOWNLOAD_CONCURRENCY} потоков)… "
+                f"кандидатов: {len(pool)}"
+            )
+            raw_cands, dl_prog = asyncio.run(
+                self._download_and_judge(
+                    pool,
+                    winning,
+                    limit,
+                    slide_text,
+                    fetch_limit=len(pool),
+                    anchor_image=anchor_image,
+                    apply_score=False,
+                    visual_scene=scene,
+                )
+            )
+            collected = list(raw_cands)
+            total_bytes = int(getattr(dl_prog, "bytes_total", 0) or 0)
+            if apply_score and collected:
+                collected = self.score_candidates(
+                    collected,
+                    slide_text=slide_text,
+                    query=winning,
+                    limit=limit,
+                    visual_scene=scene,
+                    slide_index=slide_index,
+                )
+
+        # Vibe rescue: different angles matching slide text — before empty
+        if not collected and searches_used < budget:
+            from core.query_forge import vibe_rescue_queries
+
+            avoid = prior_avoid | {t.lower() for t in tried}
+            rescues = vibe_rescue_queries(
+                slide_text=slide_text,
+                visual_scene=scene,
+                topic=topic,
+                avoid=avoid,
+                max_n=min(3, budget - searches_used),
+            )
+            for ri, rq in enumerate(rescues):
+                if searches_used >= budget:
+                    break
+                print(
+                    f"[Слайд {slide_index + 1}] vibe-rescue{ri + 1}: '{rq}'"
+                )
+                pins, used_q, ai_n = self._search_select_pins(
+                    rq,
+                    slide_text=slide_text,
+                    slide_index=slide_index,
+                    limit=limit,
+                    allow_broaden=False,
+                    ignore_used=False,
+                )
+                searches_used += 1
+                tried.append(used_q or rq)
+                total_ai += ai_n
+                rescue_pins = [
+                    p for p in pins if p.pin_id not in seen_ids
+                ][:RESCUE_DOWNLOAD_CAP]
+                for p in rescue_pins:
+                    seen_ids.add(p.pin_id)
+                if not rescue_pins:
+                    continue
+                print(
+                    f"[Слайд {slide_index + 1}] vibe-download "
+                    f"{len(rescue_pins)} pins"
+                )
+                raw_cands, dl_prog = asyncio.run(
+                    self._download_and_judge(
+                        rescue_pins,
+                        used_q or rq,
+                        limit,
+                        slide_text,
+                        fetch_limit=len(rescue_pins),
+                        anchor_image=anchor_image,
+                        apply_score=False,
+                        visual_scene=scene,
+                    )
+                )
+                total_bytes += int(getattr(dl_prog, "bytes_total", 0) or 0)
+                if not raw_cands:
+                    continue
+                if apply_score:
+                    scored = self.score_candidates(
+                        list(raw_cands),
+                        slide_text=slide_text,
+                        query=used_q or rq,
+                        limit=limit,
+                        visual_scene=scene,
+                        slide_index=slide_index,
+                    )
+                    if scored:
+                        collected = scored
+                        winning = used_q or rq
+                        break
+                else:
+                    collected = list(raw_cands)
+                    winning = used_q or rq
+                    break
+
+        if not collected:
+            remain = max(0, budget - searches_used)
+            # Budget spent on vibe already — empty slot beats stock re-search
+            if remain > 0:
+                g_kept, g_q = self.guarantee_at_least_one(
+                    slide_text=slide_text,
+                    slide_index=slide_index,
+                    preferred_query=winning or chain[0],
+                    limit=max(limit, 1),
+                    topic=topic,
+                    visual_scene=scene,
+                    avoid_queries=prior_avoid | {t.lower() for t in tried},
+                    searches_budget=min(GUARANTEE_MAX_SEARCHES, remain),
+                )
+                if g_kept:
+                    collected = list(g_kept)
+                    winning = g_q or winning
+            else:
+                print(
+                    f"[Слайд {slide_index + 1}] budget exhausted "
+                    f"({searches_used}/{budget}) — empty > stock"
+                )
 
         elapsed = time.perf_counter() - t0
-        mb = total_bytes / (1024 * 1024)
+        mb = total_bytes / (1024 * 1024) if total_bytes else 0.0
         prog = HarvestProgress(
             stage="done" if collected else "empty",
             found=len(collected),
@@ -3335,7 +4517,7 @@ class PinterestHarvester:
             speed_mbps=(mb / elapsed) if elapsed > 0 else 0.0,
         )
         keep_n = limit if apply_score else self._taste_fetch_limit(limit)
-        return collected[:keep_n], prog, winning
+        return collected[: max(keep_n * 2, keep_n)], prog, winning
 
     def harvest_slides_parallel(
         self,
@@ -3368,12 +4550,18 @@ class PinterestHarvester:
             )
         def _norm(
             item: tuple,
-        ) -> tuple[str, str, int, str]:
+        ) -> tuple[str, str, int, str, list[str]]:
             q = str(item[0] or "")
             text = str(item[1] or "") if len(item) > 1 else ""
             idx = int(item[2]) if len(item) > 2 else 0
             scene = str(item[3] or "") if len(item) > 3 else ""
-            return q, text, idx, scene
+            alts_raw = item[4] if len(item) > 4 else []
+            alts: list[str] = []
+            if isinstance(alts_raw, (list, tuple)):
+                alts = [str(a).strip() for a in alts_raw if str(a).strip()]
+            elif isinstance(alts_raw, str) and alts_raw.strip():
+                alts = [alts_raw.strip()]
+            return q, text, idx, scene, alts
 
         normalized = [_norm(s) for s in slides]
 
@@ -3384,7 +4572,7 @@ class PinterestHarvester:
         self.warm_session(force=False)
 
         def _download_one(
-            q: str, text: str, idx: int, scene: str
+            q: str, text: str, idx: int, scene: str, alts: list[str]
         ) -> tuple[list[CandidateImage], HarvestProgress, str]:
             return self.harvest_until_filled(
                 q,
@@ -3397,11 +4585,12 @@ class PinterestHarvester:
                 max_attempts=max_attempts,
                 apply_score=False,
                 visual_scene=scene,
+                alt_queries=alts,
             )
 
         print(
             f"[PARALLEL] gather · {n} слайдов · workers={workers} · "
-            f"max_attempts={max_attempts}"
+            f"max_attempts={max_attempts} · multi-query=on"
         )
 
         t_pin0 = time.perf_counter()
@@ -3413,34 +4602,48 @@ class PinterestHarvester:
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 tasks = [
                     loop.run_in_executor(
-                        pool, _download_one, q, text, idx, scene
+                        pool, _download_one, q, text, idx, scene, alts
                     )
-                    for q, text, idx, scene in normalized
+                    for q, text, idx, scene, alts in normalized
                 ]
                 return list(await asyncio.gather(*tasks))
 
         raw = asyncio.run(_gather_downloads())
 
-        # Если почти всё пусто — sequential fallback (сеть ожила / rate-limit спал)
+        # Если почти всё пусто — vibe-only sequential (НЕ те же primary/alt)
         empty_n = sum(1 for cands, _p, _q in raw if not cands)
         if empty_n >= max(1, (n + 1) // 2):
             print(
                 f"[WARNING] parallel: {empty_n}/{n} пустых — "
-                f"sequential retry…"
+                f"vibe-rescue sequential…"
             )
             self.warm_session(force=True)
             time.sleep(1.0)
+            from core.query_forge import vibe_rescue_queries
+
             fixed_raw: list[
                 tuple[list[CandidateImage], HarvestProgress, str]
             ] = []
-            for (q, text, idx, scene), (cands, prog, used_q) in zip(
+            for (q, text, idx, scene, alts), (cands, prog, used_q) in zip(
                 normalized, raw
             ):
                 if cands:
                     fixed_raw.append((cands, prog, used_q))
                     continue
+                avoid = {q.lower(), (used_q or "").lower(), *(a.lower() for a in alts)}
+                avoid.discard("")
+                rescues = vibe_rescue_queries(
+                    slide_text=text,
+                    visual_scene=scene,
+                    topic=topic,
+                    avoid=avoid,
+                    max_n=2,
+                )
+                if not rescues:
+                    fixed_raw.append((cands, prog, used_q))
+                    continue
                 more, prog2, win2 = self.harvest_until_filled(
-                    q,
+                    rescues[0],
                     slide_text=text,
                     slide_index=idx,
                     limit=limit,
@@ -3450,6 +4653,9 @@ class PinterestHarvester:
                     max_attempts=1,
                     apply_score=False,
                     visual_scene=scene,
+                    alt_queries=rescues[1:],
+                    avoid_queries=avoid,
+                    search_budget=2,
                 )
                 fixed_raw.append((more, prog2, win2 or used_q or q))
                 time.sleep(0.35)
@@ -3470,10 +4676,45 @@ class PinterestHarvester:
         interim: dict[int, tuple[list[CandidateImage], HarvestProgress, str]] = {}
 
         for pos in order:
-            q, text, idx, scene = normalized[pos]
+            q, text, idx, scene, _alts = normalized[pos]
             cands, prog, used_q = raw[pos]
             slide_no = idx + 1
             if not cands:
+                if COMPLETION_FILL_ENABLED:
+                    print(
+                        f"[COMPLETION] Слайд {slide_no}: download empty — "
+                        f"soft vibe refill…"
+                    )
+                    avoid0 = {
+                        (used_q or q or "").lower(),
+                        *(a.lower() for a in _alts),
+                    }
+                    avoid0.discard("")
+                    g0, g0q = self.guarantee_at_least_one(
+                        slide_text=text,
+                        slide_index=idx,
+                        preferred_query=used_q or q,
+                        limit=max(limit, 1),
+                        topic=topic,
+                        visual_scene=scene,
+                        avoid_queries=avoid0,
+                        searches_budget=COMPLETION_MAX_SEARCHES,
+                        allow_soft=True,
+                    )
+                    if g0:
+                        interim[pos] = (g0, prog, g0q or used_q)
+                        continue
+                    n0, n0q = self.force_any_candidate(
+                        slide_text=text,
+                        slide_index=idx,
+                        topic=topic,
+                        visual_scene=scene,
+                        preferred_query=used_q or q,
+                        limit=max(limit, 1),
+                    )
+                    if n0:
+                        interim[pos] = (n0, prog, n0q or used_q)
+                        continue
                 interim[pos] = ([], prog, used_q)
                 continue
             original_pool = list(cands)
@@ -3502,7 +4743,14 @@ class PinterestHarvester:
                     query=used_q or q,
                 )
                 if not pool_em:
-                    pool_em = list(original_pool)
+                    if STRICT_SELECTION_CONTRACT:
+                        print(
+                            f"[STRICT] Слайд {slide_no}: consistency emptied "
+                            f"pool — no lock bypass"
+                        )
+                        pool_em = []
+                    else:
+                        pool_em = list(original_pool)
                 kept = self.rank_pool_emergency(
                     pool_em,
                     slide_text=text,
@@ -3511,8 +4759,40 @@ class PinterestHarvester:
                     visual_scene=scene,
                 )
                 win_q = used_q or q
-            # Гарантия: даже после emergency не оставляем слайд пустым
+            # Soft from downloaded pool — disabled under STRICT contract
+            if not kept and POOL_SOFT_UGC_ENABLED:
+                scored_pool = [
+                    c
+                    for c in original_pool
+                    if float(getattr(c, "ugc_score", 0) or 0) >= GUARANTEE_UGC_FLOOR
+                    and float(getattr(c, "taste_score", 0) or 0) >= EMERGENCY_TASTE_FLOOR
+                ]
+                if scored_pool:
+                    scored_pool.sort(
+                        key=lambda c: float(getattr(c, "ugc_score", 0) or 0),
+                        reverse=True,
+                    )
+                    kept = scored_pool[: max(limit, 1)]
+                    for c in kept:
+                        c.selection_mode = "pool_soft_ugc"
+                        c.relevance_reason = "pool soft ugc (skip re-search)"
+                    print(
+                        f"[SPEED] Слайд {slide_no}: pool-soft "
+                        f"ugc={kept[0].ugc_score:.0%} — без guarantee-search"
+                    )
+            elif not kept and STRICT_SELECTION_CONTRACT:
+                print(
+                    f"[STRICT] Слайд {slide_no}: no eligible after emergency "
+                    f"— skip pool_soft_ugc (contract)"
+                )
+            # Guarantee: vibe-rescue only; never re-search failed primary/alt
             if not kept:
+                avoid = {
+                    (used_q or q or "").lower(),
+                    (win_q or "").lower(),
+                    *(a.lower() for a in _alts),
+                }
+                avoid.discard("")
                 g_kept, g_q = self.guarantee_at_least_one(
                     slide_text=text,
                     slide_index=idx,
@@ -3520,6 +4800,8 @@ class PinterestHarvester:
                     limit=max(limit, 1),
                     topic=topic,
                     visual_scene=scene,
+                    avoid_queries=avoid,
+                    searches_budget=GUARANTEE_MAX_SEARCHES,
                 )
                 if g_kept:
                     # Still drop frontal faces / gender / attr clash when possible
@@ -3532,6 +4814,115 @@ class PinterestHarvester:
                     ) or g_kept
                     kept = g_kept
                     win_q = g_q or win_q
+                elif STRICT_SELECTION_CONTRACT and not COMPLETION_FILL_ENABLED:
+                    print(
+                        f"[STRICT] Слайд {slide_no}: empty after guarantee "
+                        f"— slide will fail (no soft-ship)"
+                    )
+            # Completion fill: last mile so factory never ships missing slides
+            if not kept and COMPLETION_FILL_ENABLED:
+                print(
+                    f"[COMPLETION] Слайд {slide_no}: last-mile — "
+                    f"style-pivot first, soft only after…"
+                )
+                # 1) Radical eased queries with HARD floors (coffee/hands/window)
+                avoid2 = {
+                    (used_q or q or "").lower(),
+                    (win_q or "").lower(),
+                    *(a.lower() for a in _alts),
+                }
+                avoid2.discard("")
+                g_pivot, g_pivot_q = self.guarantee_at_least_one(
+                    slide_text=text,
+                    slide_index=idx,
+                    preferred_query=used_q or q,
+                    limit=max(limit, 1),
+                    topic=topic,
+                    visual_scene=scene,
+                    avoid_queries=avoid2,
+                    searches_budget=COMPLETION_MAX_SEARCHES,
+                    allow_soft=False,
+                )
+                if g_pivot:
+                    kept = g_pivot
+                    win_q = g_pivot_q or win_q
+                    print(
+                        f"[COMPLETION] style-pivot «{win_q}» "
+                        f"ugc={kept[0].ugc_score:.0%} "
+                        f"mode={kept[0].selection_mode}"
+                    )
+                # 2) soft from already-downloaded pool (only if pivot missed)
+                if not kept and original_pool:
+                    scored_pool = [
+                        c
+                        for c in original_pool
+                        if float(getattr(c, "ugc_score", 0) or 0)
+                        >= COMPLETION_UGC_FLOOR
+                    ]
+                    if not scored_pool:
+                        scored_pool = sorted(
+                            original_pool,
+                            key=lambda c: float(getattr(c, "ugc_score", 0) or 0),
+                            reverse=True,
+                        )
+                        # Drop only hard junk; keep low-ugc over empty
+                        scored_pool = [
+                            c
+                            for c in scored_pool
+                            if not is_junk_candidate_image(
+                                c.image, getattr(c, "title", "") or ""
+                            )
+                        ] or scored_pool[:1]
+                    if scored_pool:
+                        scored_pool.sort(
+                            key=lambda c: float(getattr(c, "ugc_score", 0) or 0),
+                            reverse=True,
+                        )
+                        kept = scored_pool[: max(limit, 1)]
+                        for c in kept:
+                            c.selection_mode = "completion_fill"
+                            c.relevance_reason = "completion_fill pool"
+                        print(
+                            f"[COMPLETION] pool-soft ugc={kept[0].ugc_score:.0%}"
+                        )
+                # 3) extra vibe searches with soft floors
+                if not kept:
+                    g2, g2q = self.guarantee_at_least_one(
+                        slide_text=text,
+                        slide_index=idx,
+                        preferred_query=used_q or q,
+                        limit=max(limit, 1),
+                        topic=topic,
+                        visual_scene=scene,
+                        avoid_queries=avoid2,
+                        searches_budget=COMPLETION_MAX_SEARCHES,
+                        allow_soft=True,
+                    )
+                    if g2:
+                        kept = g2
+                        win_q = g2q or win_q
+                        print(
+                            f"[COMPLETION] vibe-soft «{win_q}» "
+                            f"ugc={kept[0].ugc_score:.0%}"
+                        )
+                # 4) nuclear — any non-junk photo beats an empty slot
+                if not kept:
+                    n_kept, n_q = self.force_any_candidate(
+                        slide_text=text,
+                        slide_index=idx,
+                        topic=topic,
+                        visual_scene=scene,
+                        preferred_query=used_q or q,
+                        limit=max(limit, 1),
+                    )
+                    if n_kept:
+                        kept = n_kept
+                        win_q = n_q or win_q
+                if not kept:
+                    print(
+                        f"[COMPLETION] Слайд {slide_no}: still empty "
+                        f"— carousel will fail"
+                    )
             # Lock gender from slide 1 winner if DNA did not set it
             if idx == 0 and kept and carousel_gender is None:
                 try:
@@ -3550,37 +4941,47 @@ class PinterestHarvester:
             self.last_attribute_consistency = "pass"
             print("[attr-lock] attribute_consistency=pass")
 
-        # Пустые после download (до SigLIP) — тоже guarantee
-        for i, ((q, text, idx, scene), (cands, prog, used_q)) in enumerate(
+        # Empty after download: harvest_until_filled already ran vibe+guarantee.
+        # Do NOT re-search the same slide (that was the 13min death spiral).
+        for i, ((_q, _text, idx, _scene, _alts), (cands, prog, used_q)) in enumerate(
             zip(normalized, scored)
         ):
             if cands:
                 continue
-            g_kept, g_q = self.guarantee_at_least_one(
-                slide_text=text,
-                slide_index=idx,
-                preferred_query=used_q or q,
-                limit=max(limit, 1),
-                topic=topic,
-                visual_scene=scene,
+            print(
+                f"[STRICT] Слайд {idx + 1}: still empty after vibe budget "
+                f"— empty slot > stock (q={used_q!r})"
             )
-            if g_kept:
-                prog.downloaded = len(g_kept)
-                prog.stage = "done"
-                scored[i] = (g_kept, prog, g_q or used_q or q)
 
         # Уникальные pin между слайдами (параллельный download легко дублирует)
         pools = [list(cands) for cands, _p, _q in scored]
         deduped = dedupe_carousel_pools(pools, selected_index=0)
         fixed: list[tuple[list[CandidateImage], HarvestProgress, str]] = []
-        for (cands, prog, win_q), new_pool in zip(scored, deduped):
+        for i, ((cands, prog, win_q), new_pool) in enumerate(zip(scored, deduped)):
+            q, text, idx, scene, _alts = normalized[i]
             if new_pool is not cands and [
                 c.pin_id for c in (cands[:1] or [])
             ] != [c.pin_id for c in (new_pool[:1] or [])]:
                 print(
-                    f"[dedupe] slide pin {cands[0].pin_id if cands else '—'} "
-                    f"-> {new_pool[0].pin_id if new_pool else '—'}"
+                    f"[dedupe] slide pin {cands[0].pin_id if cands else '-'} "
+                    f"-> {new_pool[0].pin_id if new_pool else '-'}"
                 )
+            # Dedupe emptied the slide — nuclear refill (never leave hole)
+            if not new_pool and COMPLETION_FILL_ENABLED:
+                print(
+                    f"[dedupe] slide {idx + 1} emptied — nuclear refill"
+                )
+                n_kept, n_q = self.force_any_candidate(
+                    slide_text=text,
+                    slide_index=idx,
+                    topic=topic,
+                    visual_scene=scene,
+                    preferred_query=win_q or q,
+                    limit=max(limit, 1),
+                )
+                if n_kept:
+                    new_pool = n_kept
+                    win_q = n_q or win_q
             # Hard-ban финальных pin сразу — следующие карусели / slides не возьмут
             if new_pool and new_pool[0].pin_id:
                 self.mark_used([str(new_pool[0].pin_id)])

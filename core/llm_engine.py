@@ -12,6 +12,7 @@ Few-shot: локальный RAG (fastembed) по всей viral_playbook (~1600
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -285,6 +286,14 @@ BANNED_MOODBOARD_PHRASES: tuple[str, ...] = (
     "study aesthetic",
     "girl aesthetic",
     "aesthetic journaling",
+    # Empty lifestyle fillers — look like stock, weak slide sense
+    "wooden chair table",
+    "wooden chair kitchen",
+    "empty dining chair",
+    "old books wooden",
+    "notebook wooden chair",
+    "aesthetic room",
+    "minimalist interior",
 )
 
 BANNED_STOCK_QUERY_TERMS: tuple[str, ...] = (
@@ -834,12 +843,17 @@ class GeneratedSlide:
 
 
 class CharacterDNA(BaseModel):
-    """Паспорт героя карусели — физические маркеры для query + SigLIP lock."""
+    """
+    Паспорт героя карусели — только базовые физические маркеры
+    (волосы / кожа / возраст / телосложение) для query + SigLIP lock.
+    Одинаковое лицо и одинаковый outfit НЕ требуются.
+    """
 
     gender: Literal["female", "male"] = "female"
-    hair: str = "long hair"
-    style: str = "young adult casual"
-    skin_tone: str = "fair"
+    hair: str = "long brown hair"
+    style: str = "woman mid 20s, casual"
+    skin_tone: str = "olive"
+    build: str = "average"
 
     @field_validator("gender", mode="before")
     @classmethod
@@ -849,7 +863,7 @@ class CharacterDNA(BaseModel):
             return "male"
         return "female"
 
-    @field_validator("hair", "style", "skin_tone", mode="before")
+    @field_validator("hair", "style", "skin_tone", "build", mode="before")
     @classmethod
     def _strip_str(cls, value: Any) -> str:
         return re.sub(r"\s+", " ", str(value or "").strip())[:80]
@@ -1230,9 +1244,10 @@ FIXED STRUCTURE — dynamic JSON (character passport + slides 5–9):
 {{
   "character_dna": {{
     "gender": "female",
-    "hair": "long blonde hair",
-    "style": "young woman early 20s, casual",
-    "skin_tone": "fair"
+    "hair": "long brown hair",
+    "style": "woman mid 20s, casual",
+    "skin_tone": "olive",
+    "build": "slim"
   }},
   "slides": [
     {{"role": "hook", "text": "...", "visual_scene": "...", "search_query": "..."}},
@@ -1244,20 +1259,32 @@ FIXED STRUCTURE — dynamic JSON (character passport + slides 5–9):
 
 === CHARACTER DNA (passport — REQUIRED) ===
 - character_dna MUST be filled once for the whole carousel BEFORE writing slides.
+- Lock ONLY coarse physical traits — NOT the same face, NOT the same outfit.
+  What must stay stable: hair color+length, skin_tone, approximate age band, build.
+  Outfit / clothes / jewelry / nails can change freely between slides.
 - gender: "female" or "male" (match the first-person narrator of THIS topic).
-- hair: concrete, searchable (e.g. "long blonde hair", "short dark curly hair").
-- style: age + vibe in a few words (e.g. "young woman early 20s, casual").
-- skin_tone: fair / light / medium / olive / brown / deep — one word or short phrase.
-- Keep DNA STABLE across all slides — never change hair/gender mid-carousel.
+- hair: concrete, searchable — VARY across carousels. Examples of VALID looks
+  (pick ONE, do NOT default to blonde):
+  "long brown hair", "long dark curly hair", "long black hair",
+  "shoulder length auburn hair", "wavy light brown hair",
+  "short dark hair", "long ginger hair", "long blonde hair".
+- style: age band + vibe (e.g. "woman mid 20s, casual", "woman early 30s, casual").
+- skin_tone: fair / light / medium / olive / brown / deep — vary; do not always use fair.
+- build: slim / average / athletic / soft — one word.
+- NEVER copy the JSON example's hair/skin blindly. Stereotype "long blonde + fair"
+  is ALLOWED only when the topic itself mentions blonde/blond — otherwise prefer
+  brown / dark / black / auburn / ginger / light brown.
 
 === CHARACTER DNA → search_query inheritance ===
-- EVERY search_query that shows a person, hair, hands, or body MUST include the DNA markers
-  (e.g. hair="long blonde hair" → queries contain "blonde hair long" / "blonde").
-- Slide 1 (Hook): establish identity — e.g. "blonde girl mirror candid", bathroom/selfie/silhouette OK.
-- Slides 2..N: ONLY back-of-head / hands / objects / POV — NEVER a different face frontal!
-  Examples: "blonde hair from behind", "hands holding blonde hair", "purple shampoo bottle hands".
-- Object-only slides still keep DNA when hair/hands appear; pure environment may omit face markers
-  but MUST NOT introduce another person's face.
+- DNA hair/gender/age are for CONSISTENCY LOCKS after download — NOT for Pinterest.
+- NEVER put hair color / girl / guy / blonde / brunette into search_query.
+- search_query must name the CONFESSION PROP + place + optional action
+  (pantry, fridge, pasta sink, food scale, empty plate, gym bag…).
+- Slide 1 MAY show a person in visual_scene, but search_query still searches the SCENE
+  (e.g. "open pantry night"), not the passport photo.
+- Slides 2..N: POV / hands / objects / rooms — still scene nouns, not DNA casting.
+- Pure environment may omit people, but MUST NOT show a person whose hair color
+  clashes with DNA (enforced by attr-lock, not by stuffing hair into the query).
 
 LENGTH RULES:
 - Slide 1 MUST be role="hook". Final slide MUST be role="cta".
@@ -1344,32 +1371,41 @@ Each slide MUST include BOTH:
 
 visual_scene rules (philosophy → vision bridge):
 - Describe a REAL PHYSICAL FRAME: who/what, where, posture/action, light.
-- Example shape: "tired person sitting on kitchen floor next to fridge, dim ambient light"
-- Slide 1 MAY include the narrator's face / mirror selfie / silhouette.
+- Example shape: "person standing at open pantry at night, hand in snack bag, dim light"
+- Slide 1 MAY include the narrator as silhouette / back / hands — NEVER hair color casting.
+- FORBIDDEN in visual_scene: DNA casting (blonde/brunette/auburn/ginger/black hair,
+  girl/guy/woman with [hair], shoulder-length hair). Hair/gender live in character_dna only.
 - Slides 2+: MUST be POV / hands / objects / shoes / room / street — NEVER another face.
 - FORBIDDEN in visual_scene: quotes, abstract nouns alone (sadness, healing, triggers),
   motivational slogans, product slogans.
 - visual_scene is the SigLIP relevance anchor — it must match photographable objects.
+- If text names pretzels/chips as a BAG snack, scene must show a snack bag — NOT a
+  soft street pretzel / Christmas market pretzel.
 
 search_query rules:
-- Exactly 3–4 words. MUST be a compressed extract of THIS slide's visual_scene.
-- Formula: take 2–3 main physical nouns/props from visual_scene + candid|aesthetic.
+- Exactly 3–4 words. MUST be a compressed extract of THIS slide's visual_scene
+  OR the concrete props named in the slide text (salad, pantry, pasta, sink…).
+- Formula: [action/state] + [prop] + [place]  (optional candid last).
 - Examples:
+  text about midnight pantry binge → "open pantry night"
+  text about cold pasta over sink → "pasta over sink"
+  text about counting almonds → "almonds handful desk"
+  text about stale pretzels bag → "pretzel chips bag night" (NOT bare "pretzels")
   visual_scene "open suitcase on bedroom floor with clothes"
     → search_query "open suitcase floor candid"
-  visual_scene "faded polaroid of young couple in kitchen"
-    → search_query "polaroid couple kitchen candid"
-  visual_scene "stack of papers on cluttered desk"
-    → search_query "papers cluttered desk candid"
-- NEVER invent a query that does not share nouns with visual_scene.
+- NEVER invent a query that does not share nouns with visual_scene OR slide props.
+- NEVER put DNA casting in search_query: no blonde/brunette/ginger/girl/guy/hair.
 - NEVER copy, recycle, or rotate a fixed phrase bank across slides/topics.
 - Do NOT reuse the same 3–4 word query on more than one slide in this carousel.
-- FORBIDDEN literal word→object from slide TEXT metaphors
-  ('spark'≠coffee, 'analyzed'≠notebook, 'perfume'≠steering wheel).
+- FORBIDDEN literal abstract→object from metaphors
+  ('spark'≠coffee, 'analyzed'≠notebook) — but LITERAL props in the text ARE required
+  (if text says pantry/fridge/pasta/scale, the query MUST include that prop).
 - HARD BAN: iphone / finsta / snapshot / 35mm / photo dump / moodboard-only
   ("cozy aesthetic", "dark academia", "aesthetic night").
 - phone ONLY if visual_scene is literally about waiting/texting/doomscroll.
 - candid|aesthetic ONLY as optional last word — never alone.
+- BAN filler-only queries: "hands candid", "feet sneakers floor", "closed door candid"
+  unless the slide text literally is about hands/feet/door.
 
 === NO LITERAL OBJECT MATCHING ===
 Never map slide vocabulary → desk props by keyword.
@@ -1388,6 +1424,7 @@ def build_user_prompt(
     product_name: str = "",
     variation_index: int = 0,
     archetype_hint: str = "",
+    avoid_character_looks: list[str] | None = None,
 ) -> str:
     topic = topic.strip()
     product = product_name.strip()
@@ -1438,18 +1475,25 @@ def build_user_prompt(
         "Hook: personal/absurd self-truth. Never 'The X protocol/rule/checklist'. Never Audit/Define.",
         "Body: short forehead-punch insights (8–18 words). Complete sentences with periods.",
         "Body language: turns out / honestly / apparently / the truth is / so basically — not coach verbs.",
-        "CHARACTER LOCK: slide 1 may show the narrator (silhouette/selfie). "
-        "Slides 2+ visual_scene = POV/hands/objects/environment ONLY — no other human faces.",
-        "REQUIRED top-level character_dna: gender, hair, style, skin_tone — "
-        "and inherit hair/gender markers into EVERY person/hair search_query.",
+        "CHARACTER LOCK: coarse traits only (hair color, skin, age band, build). "
+        "Same face / same outfit NOT required. Slide 1 may show narrator; "
+        "slides 2+ prefer POV/hands/objects — no clashing hair color on any person.",
+        "REQUIRED top-level character_dna: gender, hair, style, skin_tone, build — "
+        "VARY hair/skin across carousels (do NOT default to long blonde + fair). "
+        "DNA is for post-download locks ONLY — NEVER put hair/girl/guy into search_query.",
         "Ban: protocol, audit your, triage checklist, cognitive performance, optimize output, sensory reset.",
         "Do not use 'close tabs' unless topic is context switching.",
         'CTA grammar ONLY: "Save this for …" OR "Send this to …" — warm, specific, zero corporate close.',
-        "search_query: 3–4 words = nouns from THIS slide's visual_scene + candid. "
+        "search_query: 3–4 words = [action] + [confession PROP] + [place]. "
+        "If text says pantry/pasta/fridge/almonds/scale — those words MUST be in the query. "
         "ALSO required: visual_scene = physical camera frame "
         "(who/where/pose/light) — NOT a metaphor quote. "
-        "search_query MUST share nouns with visual_scene — never a stock phrase bank. "
-        "FORBIDDEN: literal word→object from text, iphone/finsta/35mm, moodboard-only.",
+        "CRITICAL: every slide MUST have a UNIQUE search_query. "
+        "FORBIDDEN DNA casting queries: 'blonde hair girl', 'hands girl black hair', "
+        "'ginger hair bathroom'. "
+        "FORBIDDEN filler-only: hands candid / feet sneakers / closed door — "
+        "unless the slide text is literally about that. "
+        "FORBIDDEN: literal abstract→object, iphone/finsta/35mm, moodboard-only.",
     ]
 
     if archetype_hint:
@@ -1473,6 +1517,19 @@ def build_user_prompt(
         lines.append(
             '2-MINUTE RULE TOPIC: NEVER mention "2pm" or afternoon slump in hook or slides. '
             "Focus strictly on 2-minute micro-task friction / avoidance."
+        )
+
+    avoided = [a.strip() for a in (avoid_character_looks or []) if a and str(a).strip()]
+    if avoided:
+        lines.append(
+            "DNA DIVERSITY: do NOT reuse these already-used looks from earlier carousels "
+            "in this run: "
+            + "; ".join(avoided[:8])
+            + ". Pick a clearly different hair color family and/or skin_tone."
+        )
+    else:
+        lines.append(
+            "DNA DIVERSITY: prefer non-blonde looks unless the topic itself says blonde/blond."
         )
 
     return "\n".join(lines)
@@ -1670,6 +1727,7 @@ class OllamaGenerator:
         niche: str = "",
         *,
         run_critic: bool = False,
+        avoid_character_dnas: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         topic = (topic or "").strip()
         if not topic:
@@ -1682,6 +1740,28 @@ class OllamaGenerator:
 
         from core.archetypes import archetype_prompt_hint, select_archetype
 
+        avoid_families = {
+            _hair_color_family(str(d.get("hair") or ""))
+            for d in (avoid_character_dnas or [])
+            if isinstance(d, dict)
+        }
+        avoid_families.discard("other")
+        avoid_looks = []
+        for d in avoid_character_dnas or []:
+            if not isinstance(d, dict):
+                continue
+            bit = ", ".join(
+                x
+                for x in (
+                    str(d.get("hair") or "").strip(),
+                    str(d.get("skin_tone") or "").strip(),
+                    str(d.get("build") or "").strip(),
+                )
+                if x
+            )
+            if bit:
+                avoid_looks.append(bit)
+
         archetype = select_archetype(topic)
         arch_hint = archetype_prompt_hint(archetype)
         user_prompt = build_user_prompt(
@@ -1689,6 +1769,7 @@ class OllamaGenerator:
             product,
             variation_index=variation_index,
             archetype_hint=arch_hint,
+            avoid_character_looks=avoid_looks,
         )
         system_prompt = build_system_prompt(examples)
 
@@ -1713,6 +1794,8 @@ class OllamaGenerator:
         character_dna = sanitize_character_dna(
             parsed.get("character_dna") if isinstance(parsed, dict) else None,
             topic=topic,
+            variation_index=variation_index,
+            avoid_families=avoid_families,
         )
         slides = sanitize_and_slots_to_slides(
             parsed,
@@ -1760,9 +1843,11 @@ class OllamaGenerator:
                 critic_meta["error"] = str(exc)
 
         logger.info(
-            "character_dna locked: gender=%s hair=%r style=%r",
+            "character_dna locked: gender=%s hair=%r skin=%r build=%r style=%r",
             character_dna.get("gender"),
             character_dna.get("hair"),
+            character_dna.get("skin_tone"),
+            character_dna.get("build"),
             character_dna.get("style"),
         )
         return {
@@ -2565,8 +2650,114 @@ def _is_banned_decor_query(query: str) -> bool:
     return _is_banned_query(query)
 
 
-def _default_character_dna(topic: str = "") -> dict[str, str]:
-    """Fallback passport from topic cues (female-coded relationship topics → female)."""
+def _hair_color_family(hair: str) -> str:
+    h = (hair or "").lower()
+    if any(t in h for t in ("blonde", "blond", "platinum")):
+        return "blonde"
+    if any(t in h for t in ("ginger", "auburn", "red hair", "redhead")):
+        return "ginger"
+    # light brown / caramel BEFORE generic brown
+    if any(
+        t in h
+        for t in ("light brown", "caramel", "honey", "dirty blonde")
+    ) or ("light" in h and "brown" in h):
+        return "light_brown"
+    if any(t in h for t in ("black",)):
+        return "black"
+    if any(t in h for t in ("brunette", "brown", "dark")):
+        return "brown"
+    if "light" in h:
+        return "light_brown"
+    return "other"
+
+
+# Diverse female looks — blonde is ONE option, not the default.
+_FEMALE_DNA_PALETTE: list[dict[str, str]] = [
+    {
+        "hair": "long brown hair",
+        "style": "woman mid 20s, casual",
+        "skin_tone": "olive",
+        "build": "slim",
+    },
+    {
+        "hair": "long dark curly hair",
+        "style": "woman early 20s, casual",
+        "skin_tone": "medium",
+        "build": "average",
+    },
+    {
+        "hair": "long black hair",
+        "style": "woman mid 20s, casual",
+        "skin_tone": "deep",
+        "build": "slim",
+    },
+    {
+        "hair": "shoulder length auburn hair",
+        "style": "woman early 30s, casual",
+        "skin_tone": "fair",
+        "build": "average",
+    },
+    {
+        "hair": "wavy light brown hair",
+        "style": "woman mid 20s, casual",
+        "skin_tone": "light",
+        "build": "soft",
+    },
+    {
+        "hair": "short dark hair",
+        "style": "woman late 20s, casual",
+        "skin_tone": "olive",
+        "build": "athletic",
+    },
+    {
+        "hair": "long ginger hair",
+        "style": "woman early 20s, casual",
+        "skin_tone": "fair",
+        "build": "slim",
+    },
+    {
+        "hair": "long blonde hair",
+        "style": "woman early 20s, casual",
+        "skin_tone": "fair",
+        "build": "slim",
+    },
+]
+
+_MALE_DNA_PALETTE: list[dict[str, str]] = [
+    {
+        "hair": "short dark hair",
+        "style": "man mid 20s, casual",
+        "skin_tone": "fair",
+        "build": "average",
+    },
+    {
+        "hair": "short brown hair",
+        "style": "man early 30s, casual",
+        "skin_tone": "olive",
+        "build": "athletic",
+    },
+    {
+        "hair": "short black hair",
+        "style": "man mid 20s, casual",
+        "skin_tone": "medium",
+        "build": "average",
+    },
+    {
+        "hair": "curly dark hair",
+        "style": "man late 20s, casual",
+        "skin_tone": "deep",
+        "build": "soft",
+    },
+]
+
+
+def _default_character_dna(
+    topic: str = "",
+    *,
+    variation_index: int = 0,
+    avoid_families: set[str] | None = None,
+) -> dict[str, str]:
+    """Stable-but-diverse passport from topic + variation (no blonde monopoly)."""
     low = (topic or "").lower()
     female_cues = (
         "girl",
@@ -2580,27 +2771,64 @@ def _default_character_dna(topic: str = "") -> dict[str, str]:
         "easygoing girl",
     )
     male_cues = ("guy", "man ", "he ", "his ", "boyfriend", "husband", "male")
-    if any(c in low for c in male_cues) and not any(c in low for c in female_cues):
-        return {
-            "gender": "male",
-            "hair": "short dark hair",
-            "style": "young man mid 20s, casual",
-            "skin_tone": "fair",
-        }
-    hair = "long blonde hair" if "blonde" in low else "long brown hair"
+    male = any(c in low for c in male_cues) and not any(
+        c in low for c in female_cues
+    )
+    palette = _MALE_DNA_PALETTE if male else _FEMALE_DNA_PALETTE
+    avoid = set(avoid_families or ())
+
+    # Topic explicitly asks for blonde → allow blonde pick.
+    force_blonde = (not male) and ("blonde" in low or "blond" in low)
+
+    candidates = []
+    for look in palette:
+        fam = _hair_color_family(look["hair"])
+        if force_blonde and fam != "blonde":
+            continue
+        if fam in avoid and not force_blonde:
+            continue
+        candidates.append(look)
+    if not candidates:
+        candidates = list(palette)
+
+    # Blonde is allowed but not preferred — only when topic asks or
+    # non-blonde options are exhausted by avoid_families.
+    if not force_blonde:
+        non_blonde = [
+            c
+            for c in candidates
+            if _hair_color_family(c["hair"]) != "blonde"
+        ]
+        if non_blonde:
+            candidates = non_blonde
+
+    # Deterministic pick from topic+variation so same topic is stable,
+    # different topics / indices spread across the palette.
+    digest = hashlib.md5(
+        f"{low}|{variation_index}|dna_v2".encode("utf-8")
+    ).hexdigest()
+    seed = int(digest[:8], 16)
+    pick = candidates[seed % len(candidates)]
     return {
-        "gender": "female",
-        "hair": hair,
-        "style": "young woman early 20s, casual",
-        "skin_tone": "fair",
+        "gender": "male" if male else "female",
+        "hair": pick["hair"],
+        "style": pick["style"],
+        "skin_tone": pick["skin_tone"],
+        "build": pick["build"],
     }
 
 
 def sanitize_character_dna(
-    raw: Any, *, topic: str = ""
+    raw: Any,
+    *,
+    topic: str = "",
+    variation_index: int = 0,
+    avoid_families: set[str] | None = None,
 ) -> dict[str, str]:
-    """Normalize character_dna from Gemini payload or invent a stable fallback."""
-    base = _default_character_dna(topic)
+    """Normalize character_dna; diversify away from overused hair families."""
+    base = _default_character_dna(
+        topic, variation_index=variation_index, avoid_families=avoid_families
+    )
     if not isinstance(raw, dict):
         return base
     try:
@@ -2609,10 +2837,24 @@ def sanitize_character_dna(
             hair=raw.get("hair") or base["hair"],
             style=raw.get("style") or base["style"],
             skin_tone=raw.get("skin_tone") or base["skin_tone"],
+            build=raw.get("build") or base.get("build") or "average",
         )
-        return dna.model_dump()
+        out = dna.model_dump()
     except Exception:
         return base
+
+    fam = _hair_color_family(out["hair"])
+    avoid = set(avoid_families or ())
+    topic_low = (topic or "").lower()
+    topic_wants_blonde = "blonde" in topic_low or "blond" in topic_low
+
+    # Gemini copies the old blonde example → re-roll unless topic asks for it
+    # or we already avoided that family.
+    stereotype_blonde = fam == "blonde" and not topic_wants_blonde
+    reused = fam in avoid and not topic_wants_blonde
+    if stereotype_blonde or reused:
+        return base
+    return out
 
 
 def character_hair_tokens(dna: dict[str, str]) -> list[str]:
@@ -2626,6 +2868,7 @@ def character_hair_tokens(dna: dict[str, str]) -> list[str]:
         "brunette",
         "ginger",
         "redhead",
+        "auburn",
         "black",
         "brown",
         "dark",
@@ -2649,24 +2892,13 @@ def character_hair_tokens(dna: dict[str, str]) -> list[str]:
     return ordered[:4]
 
 
-def inject_character_markers_into_query(
-    query: str,
-    dna: dict[str, str],
-    *,
-    slide_index: int = 0,
-) -> str:
-    """
-    Inject DNA physical markers into person/hair/hands search_query.
-    Pure object/environment queries are left alone (no forced 'blonde hair').
-    Slide 1: establish identity. Slides 2+: rewrite facey shots to behind/hands.
-    """
-    if not dna:
-        return query
-    q = re.sub(r"\s+", " ", (query or "").strip())
-    if not q:
-        return q
-    gender = str(dna.get("gender") or "female").lower()
-    person = "girl" if gender == "female" else "guy"
+def _dna_hair_color_token(dna: dict[str, str]) -> str:
+    """Primary searchable hair-color token from DNA."""
+    hair = str(dna.get("hair") or "").lower()
+    # Prefer multi-word families before single-token scan.
+    # "caramel" is a single Pinterest-friendly token (query is 4 words max).
+    if "light brown" in hair or ("light" in hair and "brown" in hair):
+        return "caramel"
     hair_toks = character_hair_tokens(dna)
     color = next(
         (
@@ -2682,86 +2914,99 @@ def inject_character_markers_into_query(
                 "black",
                 "brown",
                 "dark",
+                "auburn",
             }
         ),
-        hair_toks[0] if hair_toks else "hair",
+        "",
     )
-    length = "long" if "long" in hair_toks else ("short" if "short" in hair_toks else "")
+    if color == "brown":
+        return "brunette"
+    if color == "redhead":
+        return "ginger"
+    if color == "auburn":
+        return "auburn"
+    if color == "blond":
+        return "blonde"
+    return color or (hair_toks[0] if hair_toks else "hair")
 
-    def _has_hair_marker(text: str) -> bool:
-        low = text.lower()
-        return any(t in low for t in hair_toks if t != "hair") or "hair" in low
 
-    def _is_personish(text: str) -> bool:
-        low = text.lower()
-        return bool(
-            re.search(
-                r"\b(girl|guy|woman|women|man|men|person|people|hair|"
-                r"blonde|blond|brunette|hand|hands|holding|behind|"
-                r"selfie|mirror|portrait|face)\b",
-                low,
-            )
+_FOREIGN_HAIR_COLORS: tuple[str, ...] = (
+    "blonde",
+    "blond",
+    "platinum",
+    "brunette",
+    "ginger",
+    "redhead",
+    "auburn",
+    "black",
+    "brown",
+    "dark",
+    "caramel",
+    "honey",
+)
+
+
+def _query_has_foreign_hair_color(query: str, dna_color: str) -> bool:
+    """True if query names a hair color that is not the DNA color family."""
+    low = (query or "").lower()
+    dna_fam = _hair_color_family(dna_color)
+    for tok in _FOREIGN_HAIR_COLORS:
+        if tok not in low:
+            continue
+        # map token → family
+        fam = _hair_color_family(tok)
+        if fam != dna_fam and fam != "other":
+            return True
+    return False
+
+
+def inject_character_markers_into_query(
+    query: str,
+    dna: dict[str, str],
+    *,
+    slide_index: int = 0,
+) -> str:
+    """
+    Soft DNA hygiene ONLY — never hijack the Pinterest string.
+
+    - Strip opposite-gender person words
+    - Strip foreign hair-color tokens
+    - Leave scene props intact (pasta/sink/pantry/…)
+
+    Hair/gender consistency is enforced by SigLIP attr/gender locks after download.
+    DNA casting queries like "blonde hair girl" destroy text↔photo relevance.
+    """
+    del slide_index
+    if not dna:
+        return query
+    q = re.sub(r"\s+", " ", (query or "").strip())
+    if not q:
+        return q
+
+    gender = str(dna.get("gender") or "female").lower()
+    color = _dna_hair_color_token(dna)
+
+    # Kill opposite-gender person words
+    if gender == "female":
+        q = re.sub(r"\b(guy|man|men|male|boyfriend|husband)\b", " ", q, flags=re.I)
+    else:
+        q = re.sub(
+            r"\b(girl|woman|women|female|girlfriend|wife|ladies)\b",
+            " ",
+            q,
+            flags=re.I,
         )
 
-    low = q.lower()
-    facey = any(
-        w in low
-        for w in ("selfie", "portrait", "face", "smiling", "model face", "headshot")
-    )
+    # Strip foreign hair colors only (keep scene nouns)
+    dna_fam = _hair_color_family(color)
+    for tok in _FOREIGN_HAIR_COLORS:
+        if _hair_color_family(tok) == dna_fam:
+            continue
+        q = re.sub(rf"\b{re.escape(tok)}\b", " ", q, flags=re.I)
 
-    if slide_index <= 0:
-        # Hook: establish identity (always personish)
-        if not _has_hair_marker(q):
-            parts = [color, "hair", person]
-            if length and length not in parts:
-                parts.insert(1, length)
-            # keep a scene noun if present (mirror/bathroom)
-            for noun in ("mirror", "bathroom", "bedroom", "candid"):
-                if noun in low and noun not in parts and len(parts) < 4:
-                    parts.append(noun)
-            q = " ".join(parts[:4])
-        elif person not in low and gender not in low:
-            words = re.findall(r"[A-Za-z]+", q)
-            if len(words) >= 3:
-                q = " ".join(words[:3] + [person])[:80]
-            else:
-                q = f"{q} {person}".strip()
-    else:
-        # Body/CTA: only touch person/hair/hands; leave object scenes alone
-        if not _is_personish(q) and not facey:
-            return re.sub(r"\s+", " ", q).strip()
-
-        if facey:
-            # Never keep stranger frontal face queries on 2..N
-            if "hand" in low or "holding" in low:
-                q = f"hands {color} hair"
-            else:
-                parts = [color, "hair", "behind"]
-                if length:
-                    parts = [color, "hair", length]
-                q = " ".join(parts[:4])
-        elif "hand" in low or "holding" in low:
-            # Keep hands intent; weave color if missing
-            if not _has_hair_marker(q):
-                q = f"hands {color} hair"
-        elif any(w in low for w in ("girl", "guy", "woman", "man", "person", "hair")):
-            if not _has_hair_marker(q):
-                parts = [color, "hair"]
-                if "behind" not in low:
-                    parts.append("behind" if not length else length)
-                elif length:
-                    parts.append(length)
-                q = " ".join(parts[:4])
-            elif (
-                "behind" not in low
-                and "hand" not in low
-                and "pov" not in low
-                and any(w in low for w in ("girl", "guy", "woman", "man", "person"))
-            ):
-                q = f"{color} hair behind"
-
-    q = _clamp_query_to_word_limit(q) or q
-    return re.sub(r"\s+", " ", q).strip()
+    q = re.sub(r"\s+", " ", q).strip()
+    # If we emptied the query, caller (forge) will rebuild from slide text
+    return q
 
 
 def _query_from_slide_text(slide_text: str, index: int = 0, topic: str = "") -> str:
@@ -3160,60 +3405,34 @@ def sanitize_and_slots_to_slides(
                 "Short body slide[%d] (%d words < 6): %r", i, n, texts[i]
             )
 
-    # Сначала visual_scene, потом query строго из неё
+    # Сначала visual_scene (без DNA casting), потом query строго из неё
+    from core.query_forge import scrub_dna_from_scene
+
     clean_scenes: list[str] = []
     for text, q, scene in zip(texts, queries, scenes):
-        clean_scene = re.sub(r"\s+", " ", (scene or "").strip())
+        clean_scene = scrub_dna_from_scene(scene or "")
         if len(clean_scene) < 12 or _has_cyrillic(clean_scene):
-            clean_scene = _fallback_visual_scene(text, q)
+            clean_scene = scrub_dna_from_scene(_fallback_visual_scene(text, q))
         clean_scenes.append(clean_scene)
 
     queries = _sanitize_carousel_queries(
         queries, texts, topic=topic, visual_scenes=clean_scenes
     )
-    # Character DNA inheritance: physical markers on every person/hair query
-    queries = [
-        inject_character_markers_into_query(q, dna, slide_index=i)
-        for i, q in enumerate(queries)
-    ]
 
-    preferred_markers: list[str] = []
-    try:
-        from core.preference_learner import PreferenceLearner
-
-        preferred_markers = PreferenceLearner().get_best_modifiers()
-    except Exception:
-        preferred_markers = []
+    from core.query_forge import own_slide_query
 
     out: list[GeneratedSlide] = []
     for idx, (text, q, role, scene) in enumerate(
         zip(texts, queries, roles, clean_scenes)
     ):
-        words = re.findall(r"[A-Za-z]{3,}", text)
-        marker = (
-            preferred_markers[idx % len(preferred_markers)]
-            if preferred_markers
-            else None
-        )
-        clean_q = _scrub_query(
-            q,
-            words,
-            index=idx,
-            preferred_marker=marker,
+        # One QueryOwner — no forge/inject/align ping-pong
+        clean_q = own_slide_query(
             slide_text=text,
-            topic=topic,
             visual_scene=scene,
-        )
-        # DNA markers again after scrub (scrub may strip adjectives)
-        clean_q = inject_character_markers_into_query(
-            clean_q, dna, slide_index=idx
-        )
-        # финальный якорь: query обязан делить nouns с scene
-        clean_q = align_search_query_to_scene(
-            clean_q, scene, topic=topic, index=idx
-        )
-        clean_q = inject_character_markers_into_query(
-            clean_q, dna, slide_index=idx
+            topic=topic,
+            slide_index=idx,
+            draft_query=q,
+            character_dna=dna if isinstance(dna, dict) else None,
         )
         out.append(
             GeneratedSlide(
@@ -3233,6 +3452,66 @@ def sanitize_and_slots_to_slides(
         role="cta",
         visual_scene=out[-1].visual_scene,
     )
+
+    # Exact-query uniqueness (DNA inject often collapses to same "hands X hair")
+    seen_exact: set[str] = set()
+    diversifiers = (
+        "mirror",
+        "kitchen",
+        "floor",
+        "window",
+        "bed",
+        "desk",
+        "doorway",
+        "couch",
+    )
+    for i, slide in enumerate(out):
+        key = re.sub(r"\s+", " ", (slide.search_query or "").lower()).strip()
+        if key and key not in seen_exact:
+            seen_exact.add(key)
+            continue
+        scene = slide.visual_scene or slide.text
+        nouns = extract_visual_scene_nouns(scene, limit=5)
+        alt = ""
+        if nouns:
+            alt = search_query_from_visual_scene(
+                " ".join(nouns[:3]), topic=topic
+            )
+        if not alt or re.sub(r"\s+", " ", alt.lower()).strip() in seen_exact:
+            div = diversifiers[i % len(diversifiers)]
+            base = key.split()[:2] if key else ["candid", "indoor"]
+            alt = " ".join((base + [div, "candid"])[:4])
+        alt = inject_character_markers_into_query(alt, dna, slide_index=i)
+        try:
+            from core.query_forge import own_slide_query
+
+            alt = own_slide_query(
+                slide_text=slide.text,
+                visual_scene=slide.visual_scene,
+                topic=topic,
+                slide_index=i,
+                draft_query=alt,
+                character_dna=dna if isinstance(dna, dict) else None,
+            )
+        except Exception:
+            pass
+        alt_key = re.sub(r"\s+", " ", alt.lower()).strip()
+        # last resort: append slide index token via unique noun
+        if alt_key in seen_exact:
+            alt = f"{alt} {diversifiers[(i + 3) % len(diversifiers)]}".strip()
+            alt = _clamp_query_to_word_limit(alt) or alt
+            alt_key = re.sub(r"\s+", " ", alt.lower()).strip()
+        if alt_key != key:
+            logger.warning(
+                "Unique query slide[%d]: %r → %r", i, slide.search_query, alt
+            )
+        seen_exact.add(alt_key)
+        out[i] = GeneratedSlide(
+            text=slide.text,
+            search_query=alt,
+            role=slide.role,
+            visual_scene=slide.visual_scene,
+        )
 
     return out
 

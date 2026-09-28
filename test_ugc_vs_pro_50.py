@@ -50,6 +50,41 @@ QUERIES: list[str] = [
     "unmade bed morning light candid iphone",
 ]
 
+# Свежая выборка (другие запросы) — для проверки обученной модели
+QUERIES_FRESH: list[str] = [
+    "bathroom sink toothbrush candid iphone",
+    "car cup holder keys candid iphone",
+    "laundry basket floor candid iphone",
+    "fridge open leftovers candid iphone",
+    "couch blanket remote candid iphone",
+    "backpack school desk candid iphone",
+    "gas station coffee night candid iphone",
+]
+
+# Раунд 3 — снова другие сцены, без пересечения с прошлыми probe
+QUERIES_R3: list[str] = [
+    "nightstand charger water bottle candid iphone",
+    "subway handrail commute candid iphone",
+    "pet food bowl kitchen floor candid iphone",
+    "gym locker bag sneakers candid iphone",
+    "balcony plants watering can candid iphone",
+    "office cubicle sticky notes candid iphone",
+    "parking lot shopping bags candid iphone",
+    "hotel room suitcase open candid iphone",
+]
+
+# Раунд 4 — hold-out после дообучения на 3 раундах
+QUERIES_R4: list[str] = [
+    "kitchen sink dirty dishes candid iphone",
+    "bus window rain commute candid iphone",
+    "closet floor shoes pile candid iphone",
+    "desk laptop charger mess candid iphone",
+    "porch shoes umbrella candid iphone",
+    "convenience store snacks candid iphone",
+    "bathroom mirror fog morning candid iphone",
+    "car backseat grocery bags candid iphone",
+]
+
 # Пороги вердикта (как в ТЗ)
 UGC_LIVE = 0.55
 TASTE_LIVE = 0.50
@@ -85,27 +120,29 @@ def collect_images(
     harvester: PinterestHarvester,
     *,
     target: int = TARGET,
+    queries: list[str] | None = None,
+    exclude_ids: set[str] | None = None,
 ) -> list[tuple[Image.Image, str, str]]:
     """
     Скачать до `target` уникальных фото.
     Returns list of (PIL image, pin_id, query).
     """
     collected: list[tuple[Image.Image, str, str]] = []
-    seen: set[str] = set()
+    seen: set[str] = set(exclude_ids or ())
+    qlist = list(queries or QUERIES)
 
-    for qi, query in enumerate(QUERIES, start=1):
+    for qi, query in enumerate(qlist, start=1):
         if len(collected) >= target:
             break
-        print(f"\n[{qi}/{len(QUERIES)}] search «{query}»…", flush=True)
+        print(f"\n[{qi}/{len(qlist)}] search «{query}»…", flush=True)
         try:
             pins = harvester.search(query, finalize=False)
         except Exception as exc:
             print(f"  FAIL search: {exc}", flush=True)
             continue
-        # свежие, без дублей
         fresh = [p for p in pins if p.pin_id and p.pin_id not in seen]
         need = min(PER_QUERY, target - len(collected), len(fresh))
-        pool = fresh[: max(need * 2, need)]  # запас на CDN-фейлы
+        pool = fresh[: max(need * 2, need)]
         if not pool:
             print("  0 pins", flush=True)
             continue
@@ -192,12 +229,12 @@ def score_and_save(
     return rows
 
 
-def write_html(rows: list[ProbeRow], path: Path) -> None:
+def write_html(rows: list[ProbeRow], path: Path, *, storage_key: str | None = None) -> None:
     live = sum(1 for r in rows if r.status_key == "live")
     stock = sum(1 for r in rows if r.status_key == "stock")
     mixed = sum(1 for r in rows if r.status_key == "mixed")
     total = len(rows)
-    storage_key = "ugc_probe_50_votes_v1"
+    storage_key = storage_key or f"{path.parent.name}_votes_v1"
 
     cards: list[str] = []
     for r in rows:
@@ -484,28 +521,95 @@ def main() -> int:
             pass
 
     report_only = "--report-only" in sys.argv
+    fresh = "--fresh" in sys.argv
+    round3 = "--round3" in sys.argv
+    round4 = "--round4" in sys.argv
+    # optional: --out name
+    out_name = "ugc_probe_50"
+    if "--out" in sys.argv:
+        i = sys.argv.index("--out")
+        if i + 1 < len(sys.argv):
+            out_name = sys.argv[i + 1].strip() or out_name
+    elif round4:
+        out_name = "ugc_probe_r4"
+    elif round3:
+        out_name = "ugc_probe_r3"
+    elif fresh:
+        out_name = "ugc_probe_fresh"
+
+    global OUT_DIR, IMG_DIR, REPORT_PATH, META_PATH
+    OUT_DIR = ROOT / "out" / out_name
+    IMG_DIR = OUT_DIR / "images"
+    REPORT_PATH = OUT_DIR / "report.html"
+    META_PATH = OUT_DIR / "results.json"
+    storage_key = f"{out_name}_votes_v1"
+
     t0 = time.perf_counter()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     IMG_DIR.mkdir(parents=True, exist_ok=True)
 
+    if round4:
+        tag = " [R4]"
+    elif round3:
+        tag = " [R3]"
+    elif fresh:
+        tag = " [FRESH]"
+    else:
+        tag = ""
     print("=" * 64)
-    print("  UGC vs Pro — 50 photo probe")
+    print("  UGC vs Pro — 50 photo probe" + tag)
     print("=" * 64)
     print(f"Out: {OUT_DIR}")
+
+    # показать, какая голова UGC активна
+    try:
+        from core.ugc_classifier import get_ugc_live_classifier
+
+        supervised = get_ugc_live_classifier().is_trained
+        print(f"UGC backend: {'supervised live-model' if supervised else 'zero-shot anchors'}")
+    except Exception as exc:
+        print(f"UGC backend: unknown ({exc})")
 
     if report_only:
         if not META_PATH.is_file():
             print(f"FAIL: нет {META_PATH} — сначала полный прогон")
             return 1
         rows = rows_from_json(META_PATH)
-        write_html(rows, REPORT_PATH)
+        write_html(rows, REPORT_PATH, storage_key=storage_key)
         print(f"HTML пересобран: {REPORT_PATH} ({len(rows)} карточек)")
         return 0
 
+    # не пересекаться с уже оценёнными probe
+    exclude: set[str] = set()
+    for meta in (ROOT / "out").glob("ugc_probe_*/results.json"):
+        if meta.parent.name == out_name:
+            continue
+        try:
+            for r in json.loads(meta.read_text(encoding="utf-8")):
+                if r.get("pin_id"):
+                    exclude.add(str(r["pin_id"]))
+        except Exception:
+            pass
+    if exclude:
+        print(f"exclude {len(exclude)} pins from prior probes")
+
+    if round4:
+        queries = QUERIES_R4
+    elif round3:
+        queries = QUERIES_R3
+    elif fresh:
+        queries = QUERIES_FRESH
+    else:
+        queries = QUERIES
     harvester = PinterestHarvester(on_status=_status)
     try:
         harvester.warm_session(force=False)
-        items = collect_images(harvester, target=TARGET)
+        items = collect_images(
+            harvester,
+            target=TARGET,
+            queries=queries,
+            exclude_ids=exclude,
+        )
     except Exception as exc:
         print(f"FAIL harvest: {exc}")
         traceback.print_exc()
@@ -527,7 +631,7 @@ def main() -> int:
         traceback.print_exc()
         return 1
 
-    write_html(rows, REPORT_PATH)
+    write_html(rows, REPORT_PATH, storage_key=storage_key)
     META_PATH.write_text(
         json.dumps([asdict(r) for r in rows], ensure_ascii=False, indent=2),
         encoding="utf-8",
