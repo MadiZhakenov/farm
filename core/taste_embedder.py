@@ -152,10 +152,14 @@ class TasteEmbedder:
                 self._load(None)
             torch = self._torch
             rows: list[np.ndarray] = []
-            images = [img.convert("RGB") for img in pil_images]
-            for start in range(0, len(images), EMBED_BATCH):
-                batch = images[start : start + EMBED_BATCH]
+            # Convert per-batch only — avoid doubling RAM on large taste packs.
+            for start in range(0, len(pil_images), EMBED_BATCH):
+                batch = [
+                    img.convert("RGB")
+                    for img in pil_images[start : start + EMBED_BATCH]
+                ]
                 rows.append(self._embed_batch(batch, torch))
+                del batch
             out = np.concatenate(rows, axis=0)
             self.dim = int(out.shape[1])
             return out

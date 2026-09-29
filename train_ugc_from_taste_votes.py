@@ -31,6 +31,15 @@ from core.ugc_classifier import MODEL_PATH, get_ugc_live_classifier  # noqa: E40
 from train_ugc_from_probe import collect_samples  # noqa: E402
 
 OUT = ROOT / "out"
+# SigLIP input is 224; keep a little headroom without holding full-res JPEGs.
+_THUMB = 384
+
+
+def _load_thumb(fpath: Path) -> Image.Image:
+    im = Image.open(fpath).convert("RGB")
+    im.load()
+    im.thumbnail((_THUMB, _THUMB), Image.Resampling.BICUBIC)
+    return im
 
 
 def load_taste_votes(path: Path) -> tuple[list[Image.Image], list[Image.Image], dict]:
@@ -60,8 +69,7 @@ def load_taste_votes(path: Path) -> tuple[list[Image.Image], list[Image.Image], 
             skipped += 1
             continue
         try:
-            im = Image.open(fpath).convert("RGB")
-            im.load()
+            im = _load_thumb(fpath)
         except Exception as exc:
             print(f"  bad image {rel}: {exc}")
             skipped += 1
@@ -135,8 +143,7 @@ def main() -> int:
         samples = collect_samples()
         for s in samples:
             try:
-                im = Image.open(s.file).convert("RGB")
-                im.load()
+                im = _load_thumb(Path(s.file))
             except Exception:
                 continue
             if s.label == "live":
@@ -182,7 +189,7 @@ def main() -> int:
         if not fpath.is_file():
             continue
         try:
-            im = Image.open(fpath).convert("RGB")
+            im = _load_thumb(fpath)
         except Exception:
             continue
         sc = clf.predict_live_score(im)

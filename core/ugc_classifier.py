@@ -58,7 +58,10 @@ class UGCLiveClassifier:
         embedder = get_embedder()
         backend = embedder.ensure()
         pos = embedder.embed_images(live_images)
+        # Drop pixel buffers before second half (large taste packs).
+        live_images.clear()
         neg = embedder.embed_images(stock_images)
+        stock_images.clear()
         x = np.vstack([pos, neg])
         y = np.array([1] * len(pos) + [0] * len(neg), dtype=np.int32)
         clf = LogisticRegression(

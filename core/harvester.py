@@ -53,8 +53,9 @@ SEARCH_MAX_WORKERS = 3
 WARM_COOLDOWN_SEC = 45.0
 
 # Text↔image (SigLIP) + финальный ранг после полной загрузки пула
-TEXT_RELEVANCE_MIN = 0.08  # legacy alias; отбор — SELECT_RELEVANCE_MIN
-SELECT_RELEVANCE_MIN = 0.08
+TEXT_RELEVANCE_MIN = 0.08  # legacy alias / vibe floor
+SELECT_RELEVANCE_MIN = 0.08  # abstract vibe/mood queries
+SELECT_RELEVANCE_PROP_MIN = 0.20  # tangible prop / prop-lock queries
 # ---------------------------------------------------------------------------
 # Selection contract:
 #   STRICT=True → normal path never soft-ships junk (pool_soft / guarantee_soft off).
@@ -71,14 +72,16 @@ COMPLETION_UGC_FLOOR = 0.32
 COMPLETION_REL_FLOOR = 0.05
 COMPLETION_MAX_SEARCHES = 4
 SOFT_REL_FLOOR = 0.02
-# Taste: раньше саботировал (красивый сток бил живое в ранге).
-# Режим VETO: вкус считает и режет совсем чужое, но НЕ влияет на вес ранга.
+# Taste: veto floor (DROP < 0.40) + soft rank weight (does not dominate UGC).
 TASTE_ENABLED = True
-TASTE_VETO_ONLY = True  # True = floor only, weight 0 in final score
+TASTE_VETO_ONLY = True  # True = hard DROP below TASTE_HARD_FLOOR (always on with taste)
 FINAL_REL_W = 0.35
-FINAL_TASTE_W = 0.0 if (not TASTE_ENABLED or TASTE_VETO_ONLY) else 0.30
-FINAL_UGC_W = 0.65 if (not TASTE_ENABLED or TASTE_VETO_ONLY) else 0.40
+FINAL_TASTE_W = 0.15 if TASTE_ENABLED else 0.0
+FINAL_UGC_W = 0.50 if TASTE_ENABLED else 0.65
 FINAL_HARM_W = 0.0
+# Intra-carousel visual dedupe (cosine on L2 SigLIP embeds)
+VISUAL_DEDUPE_ENABLED = True
+VISUAL_DEDUPE_COSINE_MAX = 0.88
 # Полы синхронизированы с probe (live≈0.55): ниже 0.50 = сток/глянец → DROP
 UGC_HARD_FLOOR = 0.55
 # Soft band: real night-fridge / messy-counter often land 0.45–0.51.
@@ -107,6 +110,40 @@ EMERGENCY_REL_FLOOR = (
 )
 # Guarantee soft floor — only used when GUARANTEE_SOFT_ENABLED
 GUARANTEE_UGC_FLOOR = UGC_HARD_FLOOR if STRICT_SELECTION_CONTRACT else 0.42
+
+
+def query_has_tangible_prop(
+    query: str = "",
+    visual_scene: str = "",
+    slide_text: str = "",
+) -> bool:
+    """True when scene/query names a concrete prop (fridge, almonds, desk…)."""
+    try:
+        from core.query_forge import _extract_props
+
+        return bool(
+            _extract_props(
+                f"{visual_scene} {query} {slide_text}",
+                limit=1,
+            )
+        )
+    except Exception:
+        return False
+
+
+def select_relevance_min(
+    query: str = "",
+    visual_scene: str = "",
+    slide_text: str = "",
+) -> float:
+    """
+    Dynamic relevance floor:
+      tangible prop / prop-lock → 0.20 (block offtopic objects)
+      abstract vibe/mood       → 0.08
+    """
+    if query_has_tangible_prop(query, visual_scene, slide_text):
+        return float(SELECT_RELEVANCE_PROP_MIN)
+    return float(SELECT_RELEVANCE_MIN)
 
 
 def is_vibe_scene(visual_scene: str = "", query: str = "", slide_text: str = "") -> bool:
@@ -1079,9 +1116,9 @@ def candidate_final_score(
     taste: float | None = None,
 ) -> float:
     """
-    final_score = relevance×0.30 + taste×0.30 + ugc×0.40
-    (harmony в сигнатуре для совместимости, вес 0).
-    taste=None / untrained -> 0.50.
+    final = rel×FINAL_REL_W + taste×FINAL_TASTE_W + ugc×FINAL_UGC_W
+    Live (taste on): 0.35·rel + 0.15·taste + 0.50·ugc
+    Veto floor (taste < 0.40) is applied separately in judge — not here.
     """
     del harmony
     r = max(0.0, min(1.0, float(relevance)))
@@ -1094,6 +1131,98 @@ def candidate_final_score(
         r * FINAL_REL_W + t * FINAL_TASTE_W + u * FINAL_UGC_W,
         4,
     )
+
+
+def embed_candidate_image(image: Image.Image):
+    """L2-normalized SigLIP vector for visual dedupe (1, D)."""
+    import numpy as np
+    from core.taste_embedder import get_embedder
+
+    vec = get_embedder().embed_images([image.convert("RGB")])
+    return np.asarray(vec[0], dtype=np.float32)
+
+
+def max_cosine_to_selected(emb, selected_embeddings: list) -> float:
+    """Max cosine similarity of emb vs already-chosen slide embeddings."""
+    import numpy as np
+
+    if emb is None or not selected_embeddings:
+        return 0.0
+    e = np.asarray(emb, dtype=np.float32).reshape(-1)
+    best = 0.0
+    for other in selected_embeddings:
+        o = np.asarray(other, dtype=np.float32).reshape(-1)
+        if e.shape != o.shape:
+            continue
+        sim = float(np.dot(e, o))  # both L2-normalized
+        if sim > best:
+            best = sim
+    return best
+
+
+def is_visual_duplicate(
+    emb,
+    selected_embeddings: list,
+    *,
+    threshold: float = VISUAL_DEDUPE_COSINE_MAX,
+) -> bool:
+    if not VISUAL_DEDUPE_ENABLED or not selected_embeddings:
+        return False
+    return max_cosine_to_selected(emb, selected_embeddings) >= float(threshold)
+
+
+def pick_non_duplicate(
+    ranked: list[CandidateImage],
+    selected_embeddings: list,
+    *,
+    threshold: float = VISUAL_DEDUPE_COSINE_MAX,
+) -> tuple[list[CandidateImage], object | None]:
+    """
+    Walk ranked candidates; return reordered list with first non-dup as winner
+    plus the winner embedding (or None if empty / all dups).
+    """
+    if not ranked:
+        return [], None
+    if not VISUAL_DEDUPE_ENABLED or not selected_embeddings:
+        try:
+            emb = embed_candidate_image(ranked[0].image)
+        except Exception:
+            emb = None
+        return ranked, emb
+
+    kept: list[CandidateImage] = []
+    winner_emb = None
+    dropped = 0
+    for c in ranked:
+        try:
+            emb = embed_candidate_image(c.image)
+        except Exception as exc:
+            print(f"[dedupe-vis] embed fail pin={getattr(c,'pin_id', '?')}: {exc}")
+            emb = None
+        if emb is not None and is_visual_duplicate(
+            emb, selected_embeddings, threshold=threshold
+        ):
+            sim = max_cosine_to_selected(emb, selected_embeddings)
+            c.is_relevant = False
+            c.relevance_reason = f"visual_dup cos={sim:.2f}>{threshold:.2f}"
+            dropped += 1
+            print(
+                f"[dedupe-vis] DROP pin={getattr(c,'pin_id','?')[-8:]} "
+                f"cos={sim:.2f} (too close to prior slide)",
+                flush=True,
+            )
+            continue
+        if winner_emb is None:
+            winner_emb = emb
+            c.selection_mode = (
+                (c.selection_mode or "single_pass") + "+vis_dedupe"
+                if dropped
+                else (c.selection_mode or "single_pass_argmax")
+            )
+        kept.append(c)
+    if dropped:
+        print(f"[dedupe-vis] rejected {dropped} near-duplicate(s)", flush=True)
+    return kept, winner_emb
 
 
 _FASHION_TITLE_HINTS: tuple[str, ...] = (
@@ -1806,8 +1935,11 @@ def looks_like_low_quality(image: Image.Image, *, bytes_len: int = 0) -> bool:
     Soft/noisy/tiny phone dumps we never want in a carousel.
     - short side too small
     - tiny file (heavy compress / icon)
-    - extreme blur (Laplacian variance)
+    - extreme soft/mush (center-crop Laplacian + Tenengrad + FFT must agree)
     - near-uniform mush
+
+    Intentionally strict-AND on blur: rainy glass / night vibe is soft by nature
+    and must NOT be mass-dropped (breaks review «Найти» / vibe harvest).
     """
     try:
         import numpy as np
@@ -1822,10 +1954,13 @@ def looks_like_low_quality(image: Image.Image, *, bytes_len: int = 0) -> bool:
         if bytes_len and bytes_len < 18_000:
             return True
 
-        # Blur via Laplacian variance on downscaled gray
-        small = img.resize((320, 320), Image.Resampling.BILINEAR)
+        # Center crop: global soft-focus often still has edge noise; measure subject.
+        cw, ch = int(w * 0.70), int(h * 0.70)
+        left, top = (w - cw) // 2, (h - ch) // 2
+        crop = img.crop((left, top, left + cw, top + ch))
+        small = crop.resize((256, 256), Image.Resampling.BILINEAR)
         gray = np.asarray(small.convert("L"), dtype=np.float32)
-        # 3x3 Laplacian kernel
+
         lap = (
             -4 * gray
             + np.roll(gray, 1, 0)
@@ -1833,11 +1968,32 @@ def looks_like_low_quality(image: Image.Image, *, bytes_len: int = 0) -> bool:
             + np.roll(gray, 1, 1)
             + np.roll(gray, -1, 1)
         )
-        var = float(lap.var())
-        if var < 18.0:  # very soft / out of focus
+        lap_var = float(lap.var())
+
+        gx = np.roll(gray, 1, 1) - np.roll(gray, -1, 1)
+        gy = np.roll(gray, 1, 0) - np.roll(gray, -1, 0)
+        ten = float((gx * gx + gy * gy).mean())
+
+        mag = np.abs(np.fft.fftshift(np.fft.fft2(gray)))
+        yy, xx = np.ogrid[:256, :256]
+        r = np.sqrt((yy - 128) ** 2 + (xx - 128) ** 2)
+        hi = float(mag[r > 40].mean())
+        lo = float(mag[r <= 20].mean()) + 1e-6
+        fft_ratio = hi / lo
+
+        # Extreme mush only (AB s2_new …40902049: lap≈210 ten≈375 fft≈0.018).
+        # Require agreement — single soft metric alone is common for rain/night vibe.
+        mush_votes = 0
+        if lap_var < 240.0:
+            mush_votes += 1
+        if ten < 400.0:
+            mush_votes += 1
+        if fft_ratio < 0.019:
+            mush_votes += 1
+        if mush_votes >= 2:
             return True
-        if var < 28.0 and float(gray.std()) < 28.0:
-            return True  # soft + flat = mush
+        if lap_var < 200.0 and float(gray.std()) < 28.0:
+            return True  # dead-soft + flat
         return False
     except Exception:
         return False
@@ -3099,16 +3255,19 @@ class PinterestHarvester:
         slide_index: int = 0,
         carousel_gender: str | None = None,
         character_dna: dict[str, str] | None = None,
+        prior_embeddings: list | None = None,
     ) -> list[CandidateImage]:
         """
         Single-pass scoring:
-        1) junk (обои/виджеты/3D);
-        2) attribute DNA + body: no frontal faces + gender lock;
-        3) UGC/Taste/Rel scores; POV+full-body fashion -> ugc×0.75;
-        4) final = rel×0.40 + taste×0.35 + ugc×0.25;
-        5) soft gate floors -> вне топа.
+        1) junk; 2) DNA/gender/faces; 3) UGC/Taste/Rel;
+        4) final = 0.35·rel + 0.15·taste + 0.50·ugc;
+        5) floors + borderline vision + visual dedupe vs prior slides.
         """
         del min_score
+        rel_min = select_relevance_min(
+            query=query, visual_scene=visual_scene, slide_text=slide_text
+        )
+        prior = list(prior_embeddings or [])
         pre: list[CandidateImage] = []
         junk_n = 0
         for c in candidates:
@@ -3180,7 +3339,7 @@ class PinterestHarvester:
                 slide_text=slide_text,
             )
             taste_ok = float(cand.taste_score) >= TASTE_HARD_FLOOR
-            rel_ok = rel_v >= SELECT_RELEVANCE_MIN
+            rel_ok = rel_v >= rel_min
             if (
                 ugc_ok
                 and ugc_v < UGC_HARD_FLOOR
@@ -3202,8 +3361,11 @@ class PinterestHarvester:
             elif not rel_ok:
                 rel_drop += 1
                 cand.is_relevant = False
+                prop_tag = (
+                    ", prop-lock" if rel_min > SELECT_RELEVANCE_MIN else ""
+                )
                 cand.relevance_reason = (
-                    f"rel < {SELECT_RELEVANCE_MIN:.2f} (offtopic)"
+                    f"rel < {rel_min:.2f} (offtopic{prop_tag})"
                 )
             else:
                 cand.is_relevant = True
@@ -3224,7 +3386,7 @@ class PinterestHarvester:
             self._status(
                 f"Санитария: ugc<{int(round(UGC_HARD_FLOOR * 100))}%×{ugc_drop}, "
                 f"taste<{int(round(TASTE_HARD_FLOOR * 100))}%×{taste_drop}, "
-                f"rel<{int(round(SELECT_RELEVANCE_MIN * 100))}%×{rel_drop}"
+                f"rel<{int(round(rel_min * 100))}%×{rel_drop}"
                 + (
                     f", ugc_soft×{ugc_soft_n}"
                     if ugc_soft_n
@@ -3248,7 +3410,7 @@ class PinterestHarvester:
                 slide_text=slide_text,
             )
             and float(c.taste_score) >= TASTE_HARD_FLOOR
-            and float(c.text_relevance) >= SELECT_RELEVANCE_MIN
+            and float(c.text_relevance) >= rel_min
             and bool(getattr(c, "is_relevant", False))
         ]
         if not eligible:
@@ -3284,23 +3446,32 @@ class PinterestHarvester:
                 self._status(
                     f"Ранг: 0 selectable "
                     f"(ugc≥{UGC_HARD_FLOOR:.0%} · taste≥{TASTE_HARD_FLOOR:.0%} · "
-                    f"rel≥{SELECT_RELEVANCE_MIN:.0%}"
+                    f"rel≥{rel_min:.0%}"
                     f"{'' if SOFT_REL_ENABLED else ' · STRICT contract'}) "
                     f"из {len(pre)}"
                 )
                 return []
 
         eligible.sort(key=lambda c: c.combined_score, reverse=True)
-        winner = eligible[0]
-        if "vision_keep" in (winner.relevance_reason or ""):
-            winner.selection_mode = "borderline_vision"
-        else:
-            winner.selection_mode = "single_pass_argmax"
-        kept = [winner] + eligible[1:]
+        for c in eligible:
+            if not getattr(c, "selection_mode", None):
+                if "vision_keep" in (c.relevance_reason or ""):
+                    c.selection_mode = "borderline_vision"
+                else:
+                    c.selection_mode = "single_pass_argmax"
+
+        kept, _win_emb = pick_non_duplicate(eligible, prior)
+        if not kept:
+            self._status(
+                f"Ранг: 0 after visual dedupe "
+                f"(prior_slides={len(prior)}, pool={len(eligible)})"
+            )
+            return []
+        winner = kept[0]
         self._status(
             f"Ранг: top final={winner.combined_score:.0%} "
             f"(UGC {winner.ugc_score:.0%} · вкус {winner.taste_score:.0%} · "
-            f"смысл {winner.text_relevance:.0%}) "
+            f"смысл {winner.text_relevance:.0%} · rel_min={rel_min:.0%}) "
             f"[{winner.selection_mode} · pool={len(kept)}/{len(pre)}]"
         )
         return kept
@@ -3337,6 +3508,7 @@ class PinterestHarvester:
                 slide_index=slide_index,
                 carousel_gender=carousel_gender,
                 character_dna=character_dna,
+                prior_embeddings=None,
             )
             cands = cands[: max(limit, 1)]
         dl_prog.downloaded = len(cands)
@@ -3354,6 +3526,7 @@ class PinterestHarvester:
         slide_index: int = 0,
         carousel_gender: str | None = None,
         character_dna: dict[str, str] | None = None,
+        prior_embeddings: list | None = None,
     ) -> list[CandidateImage]:
         """SigLIP UGC + Relevance + Taste (sync wrapper, single-pass)."""
         if not candidates:
@@ -3376,6 +3549,7 @@ class PinterestHarvester:
                 slide_index=slide_index,
                 carousel_gender=carousel_gender,
                 character_dna=character_dna,
+                prior_embeddings=prior_embeddings,
             )
         )
         return kept[: max(limit, 1)]
@@ -3548,6 +3722,91 @@ class PinterestHarvester:
             f"из {len(pool_for_pick)} — пусто (без сток-bypass)"
         )
         return []
+
+    def rank_review_alternatives(
+        self,
+        candidates: list[CandidateImage],
+        *,
+        query: str = "",
+        slide_text: str = "",
+        visual_scene: str = "",
+        limit: int = 8,
+    ) -> list[CandidateImage]:
+        """
+        Manual alt search in «Быстрый отсмотр»: score like production
+        (UGC + taste + rel), drop below system floors, rank by final score.
+        No DNA/gender/vision zero-out — browse must stay usable, not raw Pinterest.
+        """
+        if not candidates:
+            return []
+        pre = [
+            c
+            for c in candidates
+            if not is_fake_stub_pin_id(getattr(c, "pin_id", ""))
+            and not is_junk_candidate_image(
+                c.image, getattr(c, "title", "") or ""
+            )
+        ]
+        if not pre:
+            return []
+
+        try:
+            self._apply_text_relevance_gate(
+                list(pre),
+                slide_text,
+                query=query,
+                visual_scene=visual_scene or query,
+            )
+        except Exception:
+            for c in pre:
+                c.text_relevance = 0.5
+                c.text_relevance_scored = False
+        try:
+            self._apply_ugc_gate(pre)
+        except Exception:
+            for c in pre:
+                c.ugc_score = 0.5
+                c.ugc_scored = False
+        try:
+            self._apply_taste_gate(pre)
+        except Exception:
+            for c in pre:
+                c.taste_score = 0.5
+                c.taste_scored = False
+
+        apply_pov_fashion_ugc_penalty(pre, query)
+
+        rel_floor = select_relevance_min(
+            query, visual_scene or query, slide_text
+        )
+        # Review browse: don't require prop-lock 0.20 — user typed a free query
+        rel_floor = min(rel_floor, SELECT_RELEVANCE_MIN)
+
+        kept: list[CandidateImage] = []
+        for c in pre:
+            ugc_v = float(getattr(c, "ugc_score", 0.0) or 0.0)
+            taste_v = float(getattr(c, "taste_score", 0.0) or 0.0)
+            rel_v = float(getattr(c, "text_relevance", 0.0) or 0.0)
+            if ugc_v < UGC_HARD_FLOOR:
+                continue
+            if TASTE_ENABLED and taste_v < TASTE_HARD_FLOOR:
+                continue
+            if rel_v < rel_floor:
+                continue
+            c.combined_score = candidate_final_score(
+                rel_v, ugc_v, 100.0, taste=taste_v
+            )
+            c.is_relevant = True
+            kept.append(c)
+
+        kept.sort(key=lambda c: float(c.combined_score), reverse=True)
+        print(
+            f"[review-alts] scored={len(pre)} pass={len(kept)} "
+            f"ugc≥{UGC_HARD_FLOOR:.0%} taste≥{TASTE_HARD_FLOOR:.0%} "
+            f"rel≥{rel_floor:.2f} → top {min(limit, len(kept))}",
+            flush=True,
+        )
+        return kept[: max(1, int(limit))]
 
     def guarantee_at_least_one(
         self,
@@ -4674,6 +4933,8 @@ class PinterestHarvester:
             carousel_gender = str(dna["gender"]).lower()
             print(f"[gender-lock] from character_dna -> {carousel_gender}")
         interim: dict[int, tuple[list[CandidateImage], HarvestProgress, str]] = {}
+        # Intra-carousel visual dedupe (embeddings of winners so far)
+        selected_image_embeddings: list = []
 
         for pos in order:
             q, text, idx, scene, _alts = normalized[pos]
@@ -4702,6 +4963,11 @@ class PinterestHarvester:
                         allow_soft=True,
                     )
                     if g0:
+                        g0, emb0 = pick_non_duplicate(
+                            g0, selected_image_embeddings
+                        )
+                        if g0 and emb0 is not None:
+                            selected_image_embeddings.append(emb0)
                         interim[pos] = (g0, prog, g0q or used_q)
                         continue
                     n0, n0q = self.force_any_candidate(
@@ -4713,6 +4979,11 @@ class PinterestHarvester:
                         limit=max(limit, 1),
                     )
                     if n0:
+                        n0, emb_n = pick_non_duplicate(
+                            n0, selected_image_embeddings
+                        )
+                        if n0 and emb_n is not None:
+                            selected_image_embeddings.append(emb_n)
                         interim[pos] = (n0, prog, n0q or used_q)
                         continue
                 interim[pos] = ([], prog, used_q)
@@ -4727,6 +4998,7 @@ class PinterestHarvester:
                 slide_index=idx,
                 carousel_gender=carousel_gender,
                 character_dna=dna,
+                prior_embeddings=selected_image_embeddings,
             )
             win_q = used_q or q
             # Soft-gate пуст — emergency из уже скачанных (с теми же consistency gates)
@@ -4930,6 +5202,14 @@ class PinterestHarvester:
                 except Exception as exc:
                     print(f"[gender-lock] slide1 lock fail: {exc}")
                     carousel_gender = "female"
+            # Visual dedupe vs earlier winners (score_candidates already filtered;
+            # still apply for emergency/guarantee/completion paths).
+            if kept:
+                kept, win_emb = pick_non_duplicate(
+                    kept, selected_image_embeddings
+                )
+                if kept and win_emb is not None:
+                    selected_image_embeddings.append(win_emb)
             prog.downloaded = len(kept)
             prog.stage = "done" if kept else "filtered_empty"
             interim[pos] = (kept, prog, win_q)

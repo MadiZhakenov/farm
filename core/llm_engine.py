@@ -2,7 +2,7 @@
 """
 Генерация текстов карусели через Google Gemini API (gemini-3.1-flash-lite).
 
-Динамический JSON-контракт: slides[] из 5–9 элементов (hook / body… / cta)
+Динамический JSON-контракт: slides[] из 6–9 элементов (hook / body… / cta)
 с индивидуальным search_query на каждый слайд.
 search_query = human situation & vibe (pose + place, 3–4 слова),
 НЕ literal word→object из текста слайда.
@@ -770,8 +770,8 @@ _STUDY_DESK_MARKERS: tuple[str, ...] = (
     "desk", "journal", "library", "bookstore", "notebook", "academia", "gilmore",
 )
 
-# Динамическая длина карусели
-MIN_CAROUSEL_SLIDES = 5
+# Динамическая длина карусели (sweet spot: 6)
+MIN_CAROUSEL_SLIDES = 6
 MAX_CAROUSEL_SLIDES = 9
 
 # Legacy 5-slot keys (fallback для старых ответов)
@@ -1240,7 +1240,7 @@ VOICE = Relatable Confession & Self-Awareness:
 Use precedents for rhythm/structure ONLY. Rewrite into the confession voice above —
 do NOT copy robotic coach phrasing even if an example uses it.
 
-FIXED STRUCTURE — dynamic JSON (character passport + slides 5–9):
+FIXED STRUCTURE — dynamic JSON (character passport + slides 6–9):
 {{
   "character_dna": {{
     "gender": "female",
@@ -1291,9 +1291,9 @@ LENGTH RULES:
 - Middle slides MUST be role="body" (punchy insights, not protocols).
 - If the topic states an explicit number (e.g. "7 habits", "5 rules", "6 steps"):
   produce exactly 1 hook + exactly N body slides + 1 CTA
-  (total = N+2, clamped to 5–9).
-- If the topic has NO number: choose 5–7 total slides
-  (hook + 3–5 body + cta). Never exceed 9. Never go below 5.
+  (total = N+2, clamped to 6–9).
+- If the topic has NO number: choose 6–8 total slides
+  (hook + 4–6 body + cta). Prefer 6. Never exceed 9. Never go below 6.
 
 === SLIDE STRUCTURE: CONFESSION → PUNCHLINE → TRUTH ===
 
@@ -1458,8 +1458,8 @@ def build_user_prompt(
         )
     else:
         length_hint = (
-            "LENGTH: no explicit number in topic — choose 5–7 total slides "
-            "(hook + 3–5 body + cta) for depth. Max 9."
+            "LENGTH: no explicit number in topic — choose 6–8 total slides "
+            "(hook + 4–6 body + cta) for depth. Prefer 6. Max 9."
         )
 
     lines = [
@@ -1470,7 +1470,7 @@ def build_user_prompt(
         "TOPIC RELEVANCE: synthesize from this topic's nouns. Never reuse fixed catchphrases.",
         length_hint,
         "",
-        "Return JSON with a slides[] array now (5–9 items).",
+        "Return JSON with a slides[] array now (6–9 items).",
         'First slide role="hook", middle role="body", last role="cta".',
         "Hook: personal/absurd self-truth. Never 'The X protocol/rule/checklist'. Never Audit/Define.",
         "Body: short forehead-punch insights (8–18 words). Complete sentences with periods.",
@@ -3300,7 +3300,7 @@ def sanitize_and_slots_to_slides(
 ) -> list[GeneratedSlide]:
     """
     Принять динамический slides[] (или legacy 5-slot JSON), вычистить протечки,
-    вернуть 5–9 слайдов [{text, search_query, role}].
+    вернуть 6–9 слайдов [{text, search_query, role}].
     character_dna markers are injected into every person/hair search_query.
     """
     payload = data if isinstance(data, dict) else {}

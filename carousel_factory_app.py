@@ -63,7 +63,7 @@ from core.photo_vault import get_photo_vault
 ROOT = Path(__file__).resolve().parent
 OUT_DIR = ROOT / "out"
 SESSION_TMP = ROOT / "data" / "cache" / "sessions" / "current"
-MIN_SLIDES = 5
+MIN_SLIDES = 6
 MAX_SLIDES = 9
 CANDIDATES = 10         # единый бюджет с batch_factory
 MIN_KEEP = 3

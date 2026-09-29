@@ -482,10 +482,10 @@ def cmd_harvest_slide(slide_no: int) -> int:
         raise SystemExit(f"No slide {slide_no} in queries.json")
 
     from core.harvester import (
-        SELECT_RELEVANCE_MIN,
         UGC_HARD_FLOOR,
         PinterestHarvester,
         candidate_final_score,
+        select_relevance_min,
         ugc_eligible,
     )
 
@@ -567,11 +567,14 @@ def cmd_harvest_slide(slide_no: int) -> int:
             ugc = float(c.ugc_score or 0)
             rel = float(getattr(c, "text_relevance", 0) or 0)
             final = float(candidate_final_score(rel, ugc, 100.0, taste=0.5))
+            rel_min = select_relevance_min(
+                query=q, visual_scene=scene, slide_text=text
+            )
             ok = (
                 ugc_eligible(
                     ugc, rel, visual_scene=scene, query=q, slide_text=text
                 )
-                and rel >= SELECT_RELEVANCE_MIN
+                and rel >= rel_min
             )
             soft = ok and ugc < UGC_HARD_FLOOR
             verdict = "PASS_SOFT" if soft else ("PASS" if ok else "DROP")
@@ -581,7 +584,7 @@ def cmd_harvest_slide(slide_no: int) -> int:
                     ugc, rel, visual_scene=scene, query=q, slide_text=text
                 ):
                     reasons.append("ugc")
-                if rel < SELECT_RELEVANCE_MIN:
+                if rel < rel_min:
                     reasons.append("rel")
                 verdict = "DROP:" + ",".join(reasons)
             fname = (

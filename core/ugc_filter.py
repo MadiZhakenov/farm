@@ -247,8 +247,8 @@ def final_rank_score(
 ) -> float:
     """
     Итоговый ранг — те же веса, что harvest candidate_final_score:
-      FINAL_REL_W / FINAL_TASTE_W / FINAL_UGC_W
-    (harmony в сигнатуре для совместимости, вес 0).
+      live: rel×0.35 + taste×0.15 + ugc×0.50
+    Veto floor taste≥0.40 применяется в harvester.judge, не здесь.
     """
     del harmony
     from core.harvester import FINAL_REL_W, FINAL_TASTE_W, FINAL_UGC_W

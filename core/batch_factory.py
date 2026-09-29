@@ -261,8 +261,8 @@ def build_one_carousel(
     scenes = [
         str(s.get("visual_scene") or "").strip() for s in slides_raw if s.get("text")
     ]
-    if len(texts) < 5:
-        raise RuntimeError(f"Too few slides from LLM: {len(texts)}")
+    if len(texts) < 6:
+        raise RuntimeError(f"Too few slides from LLM: {len(texts)} (need ≥6)")
 
     texts = texts[:9]
     queries = queries[: len(texts)]

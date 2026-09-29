@@ -50,6 +50,7 @@ THUMB_CACHE_MAX = 96
 ALT_THUMB_W = 78
 ALT_THUMB_H = 104
 FETCH_MORE_N = 4  # сколько новых за один клик «Ещё»
+FETCH_FIND_N = 8  # «Найти» — свежий пул под новый query
 MAX_ALTS_SHOWN = 16
 ALT_COLS = 4  # сетка: 4 фото в ряд, рост вниз
 
@@ -902,15 +903,39 @@ class ReviewPanel(ttk.Frame):
             err = ""
             added = 0
             skipped_dup = 0
+            downloaded = 0
+            hq = query
+            auto_retried = False
+            tried_n = 1
             try:
                 from core.harvester import finalize_photo_query
 
-                hq = finalize_photo_query(query, slide_text="")
+                hq = finalize_photo_query(query, slide_text="") or query
                 harv = self._get_harvester()
                 existing = self._list_alts(row.path, slide_n)
                 entry = meta_slides[slide_idx] if slide_idx < len(meta_slides) else {}
+                alts_dir = row.path / "alts"
+                alts_dir.mkdir(exist_ok=True)
 
-                # Бан ВСЕ уже показанные pin_id (+ финал), иначе Pinterest отдаёт то же
+                # «Найти» = новый query → сбросить старые alts слайда (не копить шлак)
+                if replace_query and existing:
+                    for p in existing:
+                        try:
+                            p.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                    existing = []
+                    entry["alt_pin_ids"] = []
+                    entry["alt_count"] = 0
+                    try:
+                        (row.path / "meta.json").write_text(
+                            json.dumps(row.meta, ensure_ascii=False, indent=2),
+                            encoding="utf-8",
+                        )
+                    except OSError:
+                        pass
+
+                # Бан только текущий финал (+ уже показанные, если «Ещё»)
                 exclude: set[str] = set()
                 if entry.get("pin_id"):
                     exclude.add(str(entry["pin_id"]))
@@ -923,19 +948,154 @@ class ReviewPanel(ttk.Frame):
                     if fp
                 }
 
-                # Берём с запасом: часть отсеется как дубли
-                fetch_limit = max(FETCH_MORE_N * 4, FETCH_MORE_N + len(exclude) + 4)
-                cands, _prog = harv.harvest_for_query(
-                    hq or query,
-                    limit=fetch_limit,
-                    exclude_ids=exclude,
-                    slide_text=str(entry.get("text") or ""),
-                    slide_index=slide_idx,
-                    ignore_used=False,
-                    apply_score=True,
+                want_n = FETCH_FIND_N if replace_query else FETCH_MORE_N
+                slide_text = str(entry.get("text") or "")
+                visual_scene = str(
+                    entry.get("visual_scene")
+                    or entry.get("scene")
+                    or ""
                 )
-                alts_dir = row.path / "alts"
-                alts_dir.mkdir(exist_ok=True)
+                topic = str(
+                    row.meta.get("topic")
+                    or row.meta.get("title")
+                    or ""
+                )
+
+                def _harvest_ranked(q_try: str) -> tuple[list, int]:
+                    fl = max(want_n * 5, want_n + len(exclude) + 8)
+                    raw_local, _p = harv.harvest_for_query(
+                        q_try,
+                        limit=fl,
+                        exclude_ids=exclude,
+                        slide_text=slide_text,
+                        slide_index=slide_idx,
+                        ignore_used=True,
+                        apply_score=False,
+                        allow_broaden=False,
+                        _allow_emergency=False,
+                        visual_scene=visual_scene,
+                    )
+                    ranked_local = harv.rank_review_alternatives(
+                        raw_local,
+                        query=q_try,
+                        slide_text=slide_text,
+                        visual_scene=visual_scene or q_try,
+                        limit=want_n,
+                    )
+                    return ranked_local, len(raw_local)
+
+                # 1) primary query
+                tried: list[str] = []
+                cands, downloaded = _harvest_ranked(hq or query)
+                tried.append(hq or query)
+                used_q = hq or query
+
+                # 2) if thin/empty — auto chain from slide text (broaden → rescue → pivot)
+                min_ok = max(2, want_n // 2)
+                if len(cands) < min_ok:
+                    from core.harvester import smart_broaden_queries
+                    from core.query_forge import (
+                        style_pivot_queries,
+                        vibe_rescue_queries,
+                    )
+
+                    avoid = {t.lower() for t in tried}
+                    auto_qs: list[str] = []
+                    auto_qs.extend(
+                        smart_broaden_queries(hq or query, max_alts=2)
+                    )
+                    auto_qs.extend(
+                        vibe_rescue_queries(
+                            slide_text=slide_text,
+                            visual_scene=visual_scene,
+                            topic=topic,
+                            avoid=avoid,
+                            max_n=3,
+                            include_style_pivot=False,
+                        )
+                    )
+                    auto_qs.extend(
+                        style_pivot_queries(
+                            avoid=avoid,
+                            max_n=3,
+                            seed_text=hq or query,
+                            slide_text=slide_text,
+                            visual_scene=visual_scene,
+                            topic=topic,
+                        )
+                    )
+                    # de-dupe preserve order
+                    seen_q: set[str] = set(avoid)
+                    chain: list[str] = []
+                    for aq in auto_qs:
+                        low = (aq or "").strip().lower()
+                        if not low or low in seen_q:
+                            continue
+                        seen_q.add(low)
+                        chain.append(aq.strip())
+
+                    if isinstance(status, tk.Label):
+                        self.after(
+                            0,
+                            lambda: status.configure(
+                                text=f"Пусто/мало — пробую {len(chain)} "
+                                f"запросов под текст…"
+                            ),
+                        )
+
+                    merged: list = list(cands)
+                    seen_pins = {
+                        str(getattr(c, "pin_id", "") or "")
+                        for c in merged
+                        if getattr(c, "pin_id", None)
+                    }
+                    for aq in chain:
+                        if len(merged) >= want_n:
+                            break
+                        print(
+                            f"[review-alts] auto-try «{aq}» "
+                            f"(have {len(merged)}/{want_n})",
+                            flush=True,
+                        )
+                        more, n_raw = _harvest_ranked(aq)
+                        downloaded += n_raw
+                        tried.append(aq)
+                        if more:
+                            used_q = aq
+                        for c in more:
+                            pid = str(getattr(c, "pin_id", "") or "")
+                            if pid and pid in seen_pins:
+                                continue
+                            if pid:
+                                seen_pins.add(pid)
+                            merged.append(c)
+                            if len(merged) >= want_n:
+                                break
+                    # re-rank merged by combined_score if present
+                    merged.sort(
+                        key=lambda c: float(
+                            getattr(c, "combined_score", 0) or 0
+                        ),
+                        reverse=True,
+                    )
+                    cands = merged[:want_n]
+                    auto_retried = len(tried) > 1
+                    tried_n = len(tried)
+                    if auto_retried:
+                        print(
+                            f"[review-alts] chain tried={tried} "
+                            f"→ kept={len(cands)} used_q=«{used_q}»",
+                            flush=True,
+                        )
+
+                hq = used_q
+                if not cands and downloaded:
+                    print(
+                        f"[review-alts] 0 pass after chain "
+                        f"tried={tried} raw≈{downloaded}",
+                        flush=True,
+                    )
+
                 next_i = 0
                 if existing:
                     try:
@@ -953,7 +1113,7 @@ class ReviewPanel(ttk.Frame):
                     str(p) for p in (entry.get("alt_pin_ids") or []) if p
                 ]
                 for cand in cands:
-                    if added >= FETCH_MORE_N:
+                    if added >= want_n:
                         break
                     pid = str(getattr(cand, "pin_id", "") or "")
                     if pid and pid in exclude:
@@ -997,17 +1157,35 @@ class ReviewPanel(ttk.Frame):
                     return
                 if added == 0:
                     msg = "0 новых"
-                    if skipped_dup:
+                    if auto_retried:
+                        msg += f" (после {tried_n} запросов под текст)"
+                    if downloaded:
+                        msg += (
+                            f" · скачано {downloaded}, "
+                            "все ниже UGC/taste/rel или дубли"
+                        )
+                    elif skipped_dup:
                         msg += f" (дублей отсеяно {skipped_dup})"
-                    msg += " — смени query или попробуй позже"
+                    msg += " — смени query"
                     if isinstance(status, tk.Label):
                         status.configure(text=msg)
                     self.on_status(f"Отсмотр: 0 новых для «{query}»")
                 else:
                     extra = f", дублей −{skipped_dup}" if skipped_dup else ""
-                    self.on_status(
-                        f"Отсмотр: +{added} alts для слайда {slide_n}{extra}"
+                    chain_note = (
+                        f" · auto×{tried_n}" if auto_retried else ""
                     )
+                    self.on_status(
+                        f"Отсмотр: +{added} alts слайд {slide_n}"
+                        f"{extra}{chain_note}"
+                    )
+                    if isinstance(status, tk.Label):
+                        status.configure(
+                            text=(
+                                f"+{added} ranked{chain_note} · "
+                                f"query: {hq or query}"
+                            )
+                        )
                 if self._popover is not None:
                     self._query_var.set(
                         str(meta_slides[slide_idx].get("query") or query)
