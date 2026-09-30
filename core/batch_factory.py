@@ -19,6 +19,14 @@ from typing import Any, Callable
 from PIL import Image
 
 from core.caption_engine import generate_caption
+from core.carousel_rules import (
+    RULES_ENABLED,
+    UsedIndex,
+    build_photo_plans,
+    enforce_carousel_rules,
+    image_fingerprint,
+    neutral_plan,
+)
 from core.color_matcher import get_color_profile, get_harmony_score
 from core.harvester import (
     CandidateImage,
@@ -35,6 +43,12 @@ CarouselDoneCb = Callable[[int, int, Path], None]  # idx, total, folder
 CANDIDATES = 10
 MIN_KEEP = 3
 MAX_ALTS_SAVED = 6
+# Темы/карусели не своей категории пропускаются (фидбек: «10 не про еду»)
+CATEGORY_FILTER_ENABLED = True
+
+
+class OffCategoryError(RuntimeError):
+    """Gemini написала карусель не про категорию пачки — карусель не собираем."""
 
 
 def hard_gc() -> None:
@@ -58,6 +72,7 @@ class BatchResult:
     made: int = 0
     failed: int = 0
     folders: list[Path] = field(default_factory=list)
+    skipped: int = 0  # темы не своей категории
 
 
 def _reorder_batch_slide(
@@ -217,6 +232,8 @@ def build_one_carousel(
     folder_name: str | None = None,
     used_pins_run: set[str] | None = None,
     avoid_character_dnas: list[dict[str, str]] | None = None,
+    used_index: UsedIndex | None = None,
+    category: str | None = None,
 ) -> Path:
     def status(msg: str) -> None:
         if on_status:
@@ -268,12 +285,23 @@ def build_one_carousel(
     queries = queries[: len(texts)]
     scenes = (scenes + [""] * len(texts))[: len(texts)]
 
+    if category and CATEGORY_FILTER_ENABLED:
+        from core.niches import fits_category
+
+        if not fits_category(category, topic, texts):
+            raise OffCategoryError(
+                f"карусель не про категорию «{category}» — пропуск темы"
+            )
+
     # Run-level ban: финалы прошлых каруселей. Soft-reuse только
     # после полного истощения пула (см. _select_pins_avoiding_used).
     harvester.reset_used()
     if used_pins_run:
         harvester.seed_used(used_pins_run)
-    specs: list[tuple] = []
+    # Серия: фото из прошлых запусков тоже заняты (одно фото — одна карусель)
+    if used_index is not None and used_index.pins:
+        harvester.seed_used(used_index.pins)
+    scene_specs: list[tuple[str, str, list[str]]] = []
     character_dna = result.get("character_dna")
     if not isinstance(character_dna, dict):
         character_dna = None
@@ -291,13 +319,29 @@ def build_one_carousel(
             character_dna=character_dna,
             max_alts=2,
         )
-        # (query, text, idx, scene, alt_queries)
-        specs.append((primary, text, i, scene, alts))
+        scene_specs.append((primary, scene, list(alts)))
+
+    # Роли слайдов: 1-й по сценарию, середина чередуется со спокойными
+    # нейтральными кадрами, последний — всегда приятный (фидбек 2026-09-29)
+    plans, heavy = build_photo_plans(
+        texts,
+        scene_specs,
+        topic=topic,
+        seed=f"{index}:{variation_index}",
+        enabled=RULES_ENABLED,
+    )
+    roles = [p.role for p in plans]
+    # (query, text, idx, scene, alt_queries) — text здесь только для поиска
+    specs: list[tuple] = []
+    for i, plan in enumerate(plans):
+        specs.append((plan.query, plan.search_text, i, plan.visual_scene, plan.alts))
         print(
-            f"[query-owner] slide {i + 1}: {primary!r}"
-            + (f" +alts={alts}" if alts else ""),
+            f"[query-owner] slide {i + 1} [{plan.role}]: {plan.query!r}"
+            + (f" +alts={plan.alts}" if plan.alts else ""),
             flush=True,
         )
+    if heavy:
+        print("[rules] тяжёлая тема: в середине можно темнее, финал спокойный")
 
     status(f"[{index}] Pinterest parallel · {len(specs)} слайдов…")
     # Быстрый preflight: если Pinterest недоступен — сразу понятная ошибка
@@ -342,9 +386,10 @@ def build_one_carousel(
     )
 
     batch_slides: list[BatchSlide] = []
-    for spec, (cands, _prog, used_q) in zip(specs, harvested):
+    for i, (spec, (cands, _prog, used_q)) in enumerate(zip(specs, harvested)):
         query = str(spec[0] or "")
-        text = str(spec[1] or "") if len(spec) > 1 else ""
+        # На слайде рисуется настоящий текст, а не поисковый текст роли
+        text = texts[i] if i < len(texts) else str(spec[1] or "")
         batch_slides.append(
             BatchSlide(
                 text=text,
@@ -355,6 +400,55 @@ def build_one_carousel(
         )
     status(f"[{index}] Color Matcher + локальный вкус…")
     apply_color_harmony(batch_slides)
+
+    rule_results = []
+    if RULES_ENABLED:
+        status(f"[{index}] Правила карусели (грязь / место / повторы)…")
+        t_rules = time.perf_counter()
+
+        def _refill(slide_i: int) -> list:
+            """Для финала/нейтрального слайда: ещё один чистый запрос."""
+            if roles[slide_i] == "scene":
+                return []
+            taken = {str(sp[0]).lower() for sp in specs}
+            extra_plan = neutral_plan(
+                roles[slide_i],
+                topic=topic,
+                slide_text=texts[slide_i],
+                slide_index=slide_i + 100,
+                heavy=heavy,
+                seed=f"refill:{index}:{variation_index}",
+                taken=taken,
+            )
+            print(f"[rules] слайд {slide_i + 1}: дозапрос «{extra_plan.query}»")
+            more, _p, _q = harvester.harvest_until_filled(
+                extra_plan.query,
+                slide_text=extra_plan.search_text,
+                slide_index=slide_i,
+                limit=CANDIDATES,
+                min_keep=1,
+                topic=topic,
+                visual_scene=extra_plan.visual_scene,
+                alt_queries=extra_plan.alts,
+            )
+            more = list(more or [])
+            gender = (character_dna or {}).get("gender")
+            if more and gender in ("female", "male"):
+                from core.harvester import apply_gender_lock_filter
+
+                more, _dropped = apply_gender_lock_filter(
+                    more, gender, slide_index=slide_i, query=extra_plan.query
+                )
+            return more
+
+        rule_results = enforce_carousel_rules(
+            batch_slides,
+            roles=roles,
+            heavy=heavy,
+            used=used_index,
+            refill=_refill,
+        )
+        _timer("3b. Правила карусели", t_rules)
 
     # Atomic contract: every slide must have a photo BEFORE any final JPG is written.
     empty_idx = [i for i, s in enumerate(batch_slides) if not s.candidates]
@@ -400,6 +494,9 @@ def build_one_carousel(
         "slides": [],
         "complete": True,
         "n_slides": len(batch_slides),
+        "category": category,
+        "photo_roles": roles,
+        "heavy_topic": heavy,
     }
 
     status(f"[{index}] Render + Negative Space…")
@@ -462,6 +559,14 @@ def build_one_carousel(
             }
             if reuse_flag:
                 slide_meta["reuse_after_exhaustion"] = True
+            if i < len(rule_results):
+                slide_meta.update(rule_results[i].to_meta())
+            # alt-файл -> pin_id (для учёта при ручной замене в отсмотре)
+            slide_meta["alt_pins"] = {
+                str(j): str(c.pin_id)
+                for j, c in enumerate(s.candidates[:MAX_ALTS_SAVED])
+                if getattr(c, "pin_id", None)
+            }
             meta["slides"].append(slide_meta)
             del rendered
             hard_gc()
@@ -498,12 +603,15 @@ def build_one_carousel(
             f"+{len(selected_pins)} (всего {len(used_pins_run)})"
         )
 
-    # PhotoVault: авто-регистрация финальных фото в библиотеку
+    # PhotoVault: авто-регистрация финальных фото в библиотеку + учёт серии
+    carousel_key = str(folder.resolve())
     try:
         from core.photo_vault import get_photo_vault
 
+        vault = get_photo_vault()
+        vault.release_carousel(carousel_key)
         vault_items: list[dict[str, Any]] = []
-        for s in batch_slides:
+        for si, s in enumerate(batch_slides):
             if not s.candidates:
                 continue
             cand = s.candidates[s.selected]
@@ -516,12 +624,20 @@ def build_one_carousel(
                     "query": s.query,
                     "image_url": getattr(cand, "source_url", "") or "",
                     "tags": topic,
+                    "carousel": carousel_key,
+                    "slide": si + 1,
                 }
             )
         if vault_items:
-            get_photo_vault().register_selected(vault_items)
+            vault.register_selected(vault_items)
     except Exception as exc:
         print(f"[vault] auto-register skip: {exc}")
+    # Следующие карусели этого запуска тоже не берут эти фото
+    if used_index is not None:
+        for s in batch_slides:
+            if s.candidates:
+                cand = s.candidates[s.selected]
+                used_index.add(cand.pin_id, image_fingerprint(cand.image))
 
     status(f"[{index}] Caption…")
     caption = generate_caption(texts, topic, product)
@@ -601,6 +717,18 @@ def run_batch(
     llm = llm or OllamaGenerator()
     harvester = harvester or PinterestHarvester(on_status=_safe_status)
     result = BatchResult(run_dir=run_dir)
+    # Одно фото — одна карусель на всю серию: всё, что уже стоит в каруселях
+    try:
+        from core.photo_vault import get_photo_vault
+
+        used_index = get_photo_vault().used_index()
+        print(
+            f"[series] занято фото: {len(used_index.pins)} pin, "
+            f"{len(used_index.fps)} отпечатков"
+        )
+    except Exception as exc:
+        print(f"[series] учёт фото недоступен: {exc}")
+        used_index = UsedIndex()
     # Run-level dedupe pin_id across all carousels in this batch
     used_pins_run: set[str] = set()
     used_character_dnas: list[dict[str, str]] = []
@@ -615,6 +743,17 @@ def run_batch(
         multi = False
 
     total = len(topic_list) if multi else max(1, int(count))
+
+    # Категория пачки: по большинству тем (multi) или по самой теме
+    from core.niches import detect_niche, dominant_category
+
+    if multi:
+        category = dominant_category(topic_list)
+    else:
+        category = detect_niche(topic_list[0], default="") or None
+    if category:
+        print(f"[category] категория пачки: {category}")
+    skipped_path = run_dir / "skipped_topics.txt"
 
     from core.usage_meter import get_meter
 
@@ -653,19 +792,42 @@ def run_batch(
         if on_status:
             _safe_status(progress_msg)
         try:
-            folder = build_one_carousel(
-                llm=llm,
-                harvester=harvester,
-                topic=cur_topic,
-                product=product,
-                out_dir=run_dir,
-                index=i,
-                variation_index=variation_index,
-                on_status=_safe_status,
-                folder_name=folder_name,
-                used_pins_run=used_pins_run,
-                avoid_character_dnas=list(used_character_dnas),
-            )
+            try:
+                folder = build_one_carousel(
+                    llm=llm,
+                    harvester=harvester,
+                    topic=cur_topic,
+                    product=product,
+                    out_dir=run_dir,
+                    index=i,
+                    variation_index=variation_index,
+                    on_status=_safe_status,
+                    folder_name=folder_name,
+                    used_pins_run=used_pins_run,
+                    avoid_character_dnas=list(used_character_dnas),
+                    used_index=used_index,
+                    category=category,
+                )
+            except OffCategoryError as off:
+                if multi:
+                    raise
+                # Одна тема + вариации: ещё один угол, потом пропуск
+                print(f"[category] #{i}: {off} — пробую другой угол")
+                folder = build_one_carousel(
+                    llm=llm,
+                    harvester=harvester,
+                    topic=cur_topic,
+                    product=product,
+                    out_dir=run_dir,
+                    index=i,
+                    variation_index=variation_index + total,
+                    on_status=_safe_status,
+                    folder_name=folder_name,
+                    used_pins_run=used_pins_run,
+                    avoid_character_dnas=list(used_character_dnas),
+                    used_index=used_index,
+                    category=category,
+                )
             # Track DNA so the next carousel picks a different look
             try:
                 meta_path = folder / "meta.json"
@@ -698,6 +860,14 @@ def run_batch(
                     )
                 else:
                     _safe_status(f"[{i}] OK · {snap.line()}")
+        except OffCategoryError as off:
+            result.skipped += 1
+            msg = f"Пропущена тема #{i} (не про {category}): «{cur_topic[:70]}»"
+            print(f"[category] {msg} · {off}")
+            if on_status:
+                _safe_status(msg)
+            with skipped_path.open("a", encoding="utf-8") as fh:
+                fh.write(f"{i}\t{category}\t{cur_topic}\n")
         except Exception as exc:
             # Queue for end-of-batch retry; wipe partials
             result.failed += 1
@@ -779,6 +949,8 @@ def run_batch(
                     folder_name=folder_name,
                     used_pins_run=retry_used,
                     avoid_character_dnas=list(used_character_dnas),
+                    used_index=used_index,
+                    category=category,
                 )
                 result.made += 1
                 result.failed = max(0, result.failed - 1)
@@ -829,6 +1001,8 @@ def run_batch(
         "requested": total,
         "made": result.made,
         "failed": result.failed,
+        "skipped_off_category": result.skipped,
+        "category": category,
         "run_dir": str(run_dir),
         "finished_at": datetime.now().isoformat(timespec="seconds"),
         "usage": usage,
@@ -841,7 +1015,8 @@ def run_batch(
     if on_status:
         _safe_status(
             f"Batch done: {result.made}/{total} · fail {result.failed} · "
-            f"{meter.snapshot().line()} · log {summary_path.name}"
+            + (f"не по теме {result.skipped} · " if result.skipped else "")
+            + f"{meter.snapshot().line()} · log {summary_path.name}"
         )
     hard_gc()
     return result

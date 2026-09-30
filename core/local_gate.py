@@ -468,7 +468,7 @@ def vision_borderline_is_live(
     """
     ask = (
         f"Scene: {(scene or slide_text or 'everyday candid')[:100]}\n"
-        "Real phone UGC candid? YES=messy lived-in life. "
+        "Real phone UGC candid? YES=real everyday life (not dirty, not trash). "
         "NO=glossy stock, studio, brand shelf, meal-prep aesthetic, packshot.\n"
         "Reply with ONLY one line:\n"
         "KEEP 8 reason\n"

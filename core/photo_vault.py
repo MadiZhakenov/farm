@@ -45,6 +45,17 @@ CREATE TABLE IF NOT EXISTS blacklisted_pins (
 
 CREATE INDEX IF NOT EXISTS idx_approved_status ON approved_photos(status);
 CREATE INDEX IF NOT EXISTS idx_approved_query ON approved_photos(query);
+
+-- Какое фото стоит в какой карусели/слайде (одно фото — одна карусель на серию)
+CREATE TABLE IF NOT EXISTS used_photos (
+    carousel TEXT NOT NULL,
+    slide INTEGER NOT NULL,
+    pin_id TEXT,
+    fp TEXT,
+    used_at TEXT,
+    PRIMARY KEY (carousel, slide)
+);
+CREATE INDEX IF NOT EXISTS idx_used_pin ON used_photos(pin_id);
 """
 
 
@@ -85,6 +96,13 @@ class PhotoVault:
         with self._lock:
             with self._connect() as conn:
                 conn.executescript(_SCHEMA)
+                cols = {
+                    str(r["name"])
+                    for r in conn.execute("PRAGMA table_info(approved_photos)")
+                }
+                if "fp" not in cols:
+                    # отпечаток картинки (dHash hex) — ловит перезаливы пина
+                    conn.execute("ALTER TABLE approved_photos ADD COLUMN fp TEXT")
                 conn.commit()
 
     def _reload_blacklist(self) -> None:
@@ -370,6 +388,156 @@ class PhotoVault:
             "blacklist_memory": len(self._blacklist),
         }
 
+    # -- учёт использования (серия) ---------------------------------------
+
+    def _set_approved_fp(self, pid: str, image: Any) -> None:
+        """Отпечаток для approved-строки, если его ещё нет."""
+        from core.carousel_rules import fp_to_hex, image_fingerprint
+
+        img = self._open_image(image)
+        fp = image_fingerprint(img) if img is not None else None
+        if fp is None:
+            return
+        with self._lock:
+            with self._connect() as conn:
+                conn.execute(
+                    "UPDATE approved_photos SET fp=? "
+                    "WHERE pin_id=? AND (fp IS NULL OR fp='')",
+                    (fp_to_hex(fp), pid),
+                )
+                conn.commit()
+
+    @staticmethod
+    def _open_image(image: Any) -> Image.Image | None:
+        if image is None:
+            return None
+        if isinstance(image, Image.Image):
+            return image
+        try:
+            if isinstance(image, (bytes, bytearray)):
+                return Image.open(io.BytesIO(image)).convert("RGB")
+            return Image.open(str(image)).convert("RGB")
+        except Exception:
+            return None
+
+    def register_usage(
+        self,
+        carousel: str | Path,
+        slide: int,
+        *,
+        pin_id: Any = None,
+        image: Any = None,
+        fp: int | None = None,
+    ) -> None:
+        """
+        Слайд `slide` карусели `carousel` теперь стоит на этом фото.
+        Старая запись этого слайда заменяется (ручная замена фона).
+        """
+        from core.carousel_rules import fp_to_hex, image_fingerprint
+
+        key = str(carousel)
+        if fp is None:
+            img = self._open_image(image)
+            fp = image_fingerprint(img) if img is not None else None
+        with self._lock:
+            with self._connect() as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO used_photos"
+                    "(carousel, slide, pin_id, fp, used_at) VALUES (?,?,?,?,?)",
+                    (key, int(slide), _as_pin_id(pin_id), fp_to_hex(fp), _utc_now()),
+                )
+                conn.commit()
+
+    def release_carousel(self, carousel: str | Path) -> int:
+        """Карусель удалена/пересобрана — её фото снова свободны."""
+        with self._lock:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    "DELETE FROM used_photos WHERE carousel=?", (str(carousel),)
+                )
+                conn.commit()
+                return int(cur.rowcount or 0)
+
+    def _backfill_approved_fps(self) -> int:
+        """Отпечатки для старых approved-фото по их превью (один раз)."""
+        from core.carousel_rules import fp_to_hex, image_fingerprint
+
+        with self._lock:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    "SELECT pin_id, local_thumb_path FROM approved_photos "
+                    "WHERE (fp IS NULL OR fp='') AND local_thumb_path != ''"
+                ).fetchall()
+        updates: list[tuple[str, str]] = []
+        for r in rows:
+            p = Path(str(r["local_thumb_path"]))
+            if not p.is_absolute():
+                p = ROOT / p
+            if not p.is_file():
+                continue
+            try:
+                with Image.open(p) as im:
+                    fp = image_fingerprint(im)
+            except Exception:
+                continue
+            if fp is not None:
+                updates.append((fp_to_hex(fp), _as_pin_id(r["pin_id"])))
+        if updates:
+            with self._lock:
+                with self._connect() as conn:
+                    conn.executemany(
+                        "UPDATE approved_photos SET fp=? WHERE pin_id=?", updates
+                    )
+                    conn.commit()
+            print(f"[vault] отпечатки для {len(updates)} старых фото")
+        return len(updates)
+
+    def used_index(
+        self,
+        *,
+        exclude_carousel: str | Path | None = None,
+        exclude_pins: set[str] | None = None,
+    ):
+        """
+        Все фото, уже стоящие в каруселях серии:
+        approved_photos (финалы прошлых запусков) + used_photos (ручные замены).
+        exclude_carousel / exclude_pins — «свои» фото карусели не считаются
+        занятыми (иначе нельзя вернуть слайду его же прежний кадр).
+        """
+        from core.carousel_rules import UsedIndex, fp_from_hex
+
+        try:
+            self._backfill_approved_fps()
+        except Exception as exc:
+            print(f"[vault] backfill fp skip: {exc}")
+        idx = UsedIndex()
+        ex = str(exclude_carousel) if exclude_carousel is not None else None
+        own = {str(p) for p in (exclude_pins or set()) if p}
+        with self._lock:
+            with self._connect() as conn:
+                used_rows = conn.execute(
+                    "SELECT carousel, pin_id, fp FROM used_photos"
+                ).fetchall()
+                if ex is not None:
+                    own |= {
+                        _as_pin_id(r["pin_id"])
+                        for r in used_rows
+                        if str(r["carousel"]) == ex and r["pin_id"]
+                    }
+                for r in conn.execute(
+                    "SELECT pin_id, fp FROM approved_photos WHERE status != 'blocked'"
+                ):
+                    if _as_pin_id(r["pin_id"]) in own:
+                        continue
+                    idx.add(r["pin_id"], fp_from_hex(r["fp"]))
+                for r in used_rows:
+                    if ex is not None and str(r["carousel"]) == ex:
+                        continue
+                    if _as_pin_id(r["pin_id"]) in own:
+                        continue
+                    idx.add(r["pin_id"], fp_from_hex(r["fp"]))
+        return idx
+
     def register_selected(
         self,
         items: list[dict[str, Any]],
@@ -398,6 +566,18 @@ class PhotoVault:
             )
             if row:
                 n += 1
+                try:
+                    self._set_approved_fp(pid, img)
+                except Exception:
+                    pass
+            carousel = it.get("carousel")
+            if carousel is not None and it.get("slide") is not None:
+                try:
+                    self.register_usage(
+                        carousel, int(it["slide"]), pin_id=pid, image=img
+                    )
+                except Exception as exc:
+                    print(f"[vault] usage skip: {exc}")
         if n:
             print(f"[vault] registered {n} approved photo(s)")
         return n

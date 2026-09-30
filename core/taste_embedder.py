@@ -10,6 +10,8 @@ openai/clip-vit-base-patch32 (512). GPU fp16 если есть CUDA, иначе 
 from __future__ import annotations
 
 import threading
+from collections import OrderedDict
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -18,9 +20,84 @@ from PIL import Image
 SIGLIP_ID = "google/siglip-base-patch16-224"
 CLIP_ID = "openai/clip-vit-base-patch32"
 EMBED_BATCH = 32  # GPU-батч; на CPU тоже ок, меньше round-trips
+# pin_id → L2 vector. Same photo scored by UGC/taste/rel/dedupe once.
+EMBED_CACHE_MAX = 4096
+# Cross-run disk cache (same pin_id → free embed, no quality change)
+_DISK_CACHE_DIR = (
+    Path(__file__).resolve().parent.parent / "data" / "cache" / "siglip_img"
+)
 
 _LOCK = threading.Lock()
 _EMBEDDER: TasteEmbedder | None = None
+_IMG_VEC_CACHE: "OrderedDict[str, np.ndarray]" | None = None
+_CACHE_HITS = 0
+_CACHE_MISSES = 0
+
+
+def _cache() -> "OrderedDict[str, np.ndarray]":
+    global _IMG_VEC_CACHE
+    if _IMG_VEC_CACHE is None:
+        from collections import OrderedDict
+
+        _IMG_VEC_CACHE = OrderedDict()
+    return _IMG_VEC_CACHE
+
+
+def clear_embed_cache() -> None:
+    global _CACHE_HITS, _CACHE_MISSES
+    with _LOCK:
+        c = _cache()
+        c.clear()
+        _CACHE_HITS = 0
+        _CACHE_MISSES = 0
+
+
+def _disk_path(key: str) -> Path:
+    safe = "".join(ch for ch in key if ch.isalnum() or ch in "-_")[:80]
+    return _DISK_CACHE_DIR / f"{safe}.npy"
+
+
+def _disk_load(key: str) -> np.ndarray | None:
+    try:
+        p = _disk_path(key)
+        if not p.is_file():
+            return None
+        arr = np.asarray(np.load(str(p)), dtype=np.float32).reshape(-1)
+        if arr.size < 64 or not np.isfinite(arr).all():
+            return None
+        return arr
+    except Exception:
+        return None
+
+
+def _disk_save(key: str, vec: np.ndarray) -> None:
+    try:
+        _DISK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        np.save(
+            str(_disk_path(key)),
+            np.asarray(vec, dtype=np.float32).reshape(-1),
+        )
+    except Exception:
+        pass
+
+
+def embed_cache_stats() -> dict[str, int]:
+    with _LOCK:
+        return {
+            "size": len(_cache()),
+            "hits": int(_CACHE_HITS),
+            "misses": int(_CACHE_MISSES),
+        }
+
+
+def _norm_cache_key(key: str | None) -> str | None:
+    k = (key or "").strip()
+    if not k or k.lower() in {"none", "null"}:
+        return None
+    # fake scrape ids — don't cache (unstable junk)
+    if len(k) <= 6 and k.lower().startswith("img"):
+        return None
+    return k
 
 
 def _feature_tensor(out: Any, torch: Any):
@@ -50,6 +127,7 @@ class TasteEmbedder:
         self.backend_id = ""
         self.device = "cpu"
         self.dim = 0
+        self.attn_impl = "eager"
         self._model: Any = None
         self._processor: Any = None
         self._dtype: Any = None
@@ -74,7 +152,15 @@ class TasteEmbedder:
             return
         try:
             self._load_id(SIGLIP_ID)
-        except Exception:
+        except Exception as exc:
+            # Раньше молча уходили на CLIP — и модели вкуса/живости (обучены на
+            # SigLIP) тихо переставали работать. Теперь причина видна в логе.
+            print(
+                f"[WARNING] SigLIP не загрузился: {type(exc).__name__}: {exc}\n"
+                "[WARNING] Перехожу на запасной CLIP — модели вкуса и «живости» "
+                "работать НЕ будут. Обычно помогает install.bat "
+                "(ставит sentencepiece)."
+            )
             self._model = None
             self._processor = None
             self._load_id(CLIP_ID)
@@ -100,18 +186,42 @@ class TasteEmbedder:
             processor = AutoProcessor.from_pretrained(model_id, use_fast=True)
         except TypeError:
             processor = AutoProcessor.from_pretrained(model_id)
-        try:
-            model = AutoModel.from_pretrained(
-                model_id,
-                dtype=dtype,
-                low_cpu_mem_usage=True,
+
+        # Faster attention when CUDA: flash_attention_2 (needs flash-attn) →
+        # sdpa (PyTorch built-in) → eager. Same weights; embeddings stay close.
+        attn_candidates: list[str | None]
+        if cuda:
+            attn_candidates = ["flash_attention_2", "sdpa", None]
+        else:
+            attn_candidates = [None]
+
+        model = None
+        attn_used = "eager"
+        last_err: Exception | None = None
+        for attn in attn_candidates:
+            kwargs: dict[str, Any] = {"low_cpu_mem_usage": True}
+            if attn is not None:
+                kwargs["attn_implementation"] = attn
+            try:
+                try:
+                    model = AutoModel.from_pretrained(
+                        model_id, dtype=dtype, **kwargs
+                    )
+                except TypeError:
+                    model = AutoModel.from_pretrained(
+                        model_id, torch_dtype=dtype, **kwargs
+                    )
+                attn_used = attn or "eager"
+                break
+            except Exception as exc:
+                last_err = exc
+                model = None
+                continue
+        if model is None:
+            raise RuntimeError(
+                f"SigLIP load failed ({model_id}): {last_err}"
             )
-        except TypeError:
-            model = AutoModel.from_pretrained(
-                model_id,
-                torch_dtype=dtype,
-                low_cpu_mem_usage=True,
-            )
+
         model = model.to(self.device)
         # Жёстко: если CUDA есть — модель обязана быть на cuda
         if cuda:
@@ -125,12 +235,14 @@ class TasteEmbedder:
         self._processor = processor
         self._model = model
         self.backend_id = model_id
+        self.attn_impl = attn_used
         dev_name = (
             torch.cuda.get_device_name(0) if cuda else "cpu"
         )
         print(
             f"[SigLIP] backend={model_id} device={self.device} "
-            f"dtype={'fp16' if cuda else 'fp32'} gpu={dev_name}"
+            f"attn={attn_used} dtype={'fp16' if cuda else 'fp32'} "
+            f"gpu={dev_name}"
         )
         if cuda:
             torch.cuda.empty_cache()
@@ -141,28 +253,98 @@ class TasteEmbedder:
             except StopIteration:
                 pass
 
-    def embed_images(self, pil_images: list[Image.Image]) -> np.ndarray:
-        """L2-нормализованные векторы, shape (N, 512) или (N, 768)."""
+    def embed_images(
+        self,
+        pil_images: list[Image.Image],
+        cache_keys: list[str | None] | None = None,
+    ) -> np.ndarray:
+        """
+        L2-нормализованные векторы, shape (N, 512) или (N, 768).
+
+        cache_keys: optional pin_id per image — hit skips GPU. Same photo
+        reused by UGC / taste / relevance / dedupe without re-compute.
+        """
+        global _CACHE_HITS, _CACHE_MISSES
         if not pil_images:
             width = self.dim or 768
             return np.zeros((0, width), dtype=np.float32)
 
+        keys: list[str | None]
+        if cache_keys is None:
+            keys = [None] * len(pil_images)
+        else:
+            if len(cache_keys) != len(pil_images):
+                raise ValueError("cache_keys length must match images")
+            keys = [_norm_cache_key(k) for k in cache_keys]
+
+        n = len(pil_images)
+        out_rows: list[np.ndarray | None] = [None] * n
+        miss_imgs: list[Image.Image] = []
+        miss_idx: list[int] = []
+        miss_keys: list[str | None] = []
+        # Same pin twice in one call → one GPU forward, copy vec
+        pending_key_slot: dict[str, int] = {}
+        alias_to_miss: dict[int, int] = {}
+
         with _LOCK:
             if self._model is None:
                 self._load(None)
-            torch = self._torch
-            rows: list[np.ndarray] = []
-            # Convert per-batch only — avoid doubling RAM on large taste packs.
-            for start in range(0, len(pil_images), EMBED_BATCH):
-                batch = [
-                    img.convert("RGB")
-                    for img in pil_images[start : start + EMBED_BATCH]
-                ]
-                rows.append(self._embed_batch(batch, torch))
-                del batch
-            out = np.concatenate(rows, axis=0)
-            self.dim = int(out.shape[1])
-            return out
+            cache = _cache()
+            for i, (im, key) in enumerate(zip(pil_images, keys)):
+                if key and key in cache:
+                    cache.move_to_end(key)
+                    out_rows[i] = cache[key]
+                    _CACHE_HITS += 1
+                elif key and key in pending_key_slot:
+                    alias_to_miss[i] = pending_key_slot[key]
+                    _CACHE_HITS += 1
+                else:
+                    disk_hit = None
+                    if key:
+                        disk_hit = _disk_load(key)
+                    if disk_hit is not None:
+                        cache[key] = disk_hit
+                        cache.move_to_end(key)
+                        while len(cache) > EMBED_CACHE_MAX:
+                            cache.popitem(last=False)
+                        out_rows[i] = disk_hit
+                        _CACHE_HITS += 1
+                    else:
+                        slot = len(miss_imgs)
+                        miss_imgs.append(im)
+                        miss_idx.append(i)
+                        miss_keys.append(key)
+                        if key:
+                            pending_key_slot[key] = slot
+                        _CACHE_MISSES += 1
+
+            if miss_imgs:
+                torch = self._torch
+                rows: list[np.ndarray] = []
+                for start in range(0, len(miss_imgs), EMBED_BATCH):
+                    batch = [
+                        img.convert("RGB")
+                        for img in miss_imgs[start : start + EMBED_BATCH]
+                    ]
+                    rows.append(self._embed_batch(batch, torch))
+                    del batch
+                computed = np.concatenate(rows, axis=0)
+                self.dim = int(computed.shape[1])
+                for j, (idx, key) in enumerate(zip(miss_idx, miss_keys)):
+                    vec = np.asarray(computed[j], dtype=np.float32).reshape(-1).copy()
+                    out_rows[idx] = vec
+                    if key:
+                        cache[key] = vec
+                        cache.move_to_end(key)
+                        while len(cache) > EMBED_CACHE_MAX:
+                            cache.popitem(last=False)
+                        _disk_save(key, vec)
+                for img_i, miss_j in alias_to_miss.items():
+                    out_rows[img_i] = out_rows[miss_idx[miss_j]]
+            elif self.dim <= 0 and out_rows and out_rows[0] is not None:
+                self.dim = int(out_rows[0].shape[0])
+
+        return np.stack([r for r in out_rows if r is not None], axis=0)
 
     def embed_texts(self, texts: list[str]) -> np.ndarray:
         """L2-нормализованные текстовые эмбеддинги (тот же dim, что у картинок)."""
@@ -249,14 +431,25 @@ class TasteEmbedder:
         return float(self._cosine_to_prob(np.array([cos]))[0])
 
     def compute_text_image_relevances(
-        self, slide_text: str, images: list[Image.Image]
+        self,
+        slide_text: str,
+        images: list[Image.Image],
+        *,
+        cache_keys: list[str | None] | None = None,
+        image_vecs: np.ndarray | None = None,
     ) -> list[float]:
-        """Пакетный text↔image score для списка картинок (один text embed)."""
-        if not images:
+        """Пакетный text↔image score (один text embed; картинки с кэшем)."""
+        if not images and image_vecs is None:
             return []
         text = (slide_text or "").strip() or "lifestyle photo"
         t_vec = self.embed_texts([text])[0]
-        i_mat = self.embed_images([im.convert("RGB") for im in images])
+        if image_vecs is None:
+            i_mat = self.embed_images(
+                [im.convert("RGB") for im in images],
+                cache_keys=cache_keys,
+            )
+        else:
+            i_mat = np.asarray(image_vecs, dtype=np.float32)
         sims = i_mat @ t_vec
         probs = self._cosine_to_prob(sims)
         return [float(p) for p in probs]

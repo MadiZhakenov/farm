@@ -740,7 +740,7 @@ _TANGIBLE_OBJECT_MAP: tuple[tuple[str, str], ...] = (
     ("cookies", "cookies on plate"),
     ("noodles", "noodles bowl desk"),
     ("ramen", "ramen bowl desk"),
-    ("coffee", "spilled coffee laptop"),
+    ("coffee", "coffee mug laptop"),
     ("matcha", "matcha cup desk"),
     ("tea", "tea mug window"),
     ("wine", "wine glass table"),
@@ -748,7 +748,7 @@ _TANGIBLE_OBJECT_MAP: tuple[tuple[str, str], ...] = (
     ("shoes", "shoes by door"),
     ("mirror", "gym mirror selfie shoes"),
     ("phone", "hands holding phone"),
-    ("laptop", "spilled coffee laptop"),
+    ("laptop", "coffee mug laptop"),
     ("car", "hands holding steering wheel"),
     ("steering", "hands holding steering wheel"),
     ("driving", "hands holding steering wheel"),
@@ -1279,7 +1279,7 @@ FIXED STRUCTURE — dynamic JSON (character passport + slides 6–9):
 - DNA hair/gender/age are for CONSISTENCY LOCKS after download — NOT for Pinterest.
 - NEVER put hair color / girl / guy / blonde / brunette into search_query.
 - search_query must name the CONFESSION PROP + place + optional action
-  (pantry, fridge, pasta sink, food scale, empty plate, gym bag…).
+  (pantry, fridge, pasta bowl, food scale, plate of food, gym bag…).
 - Slide 1 MAY show a person in visual_scene, but search_query still searches the SCENE
   (e.g. "open pantry night"), not the passport photo.
 - Slides 2..N: POV / hands / objects / rooms — still scene nouns, not DNA casting.
@@ -1379,6 +1379,9 @@ visual_scene rules (philosophy → vision bridge):
 - FORBIDDEN in visual_scene: quotes, abstract nouns alone (sadness, healing, triggers),
   motivational slogans, product slogans.
 - visual_scene is the SigLIP relevance anchor — it must match photographable objects.
+- NEVER describe dirt: no dirty dishes, food waste, crumbs, trash, garbage, wrappers
+  everywhere, spilled drinks, greasy pans, messy counters. Show the SAME moment cleanly
+  (a snack bag on a tidy table, an open fridge, a plate of food, a mug by a window).
 - If text names pretzels/chips as a BAG snack, scene must show a snack bag — NOT a
   soft street pretzel / Christmas market pretzel.
 
@@ -1388,7 +1391,7 @@ search_query rules:
 - Formula: [action/state] + [prop] + [place]  (optional candid last).
 - Examples:
   text about midnight pantry binge → "open pantry night"
-  text about cold pasta over sink → "pasta over sink"
+  text about cold pasta over sink → "pasta bowl kitchen"
   text about counting almonds → "almonds handful desk"
   text about stale pretzels bag → "pretzel chips bag night" (NOT bare "pretzels")
   visual_scene "open suitcase on bedroom floor with clothes"

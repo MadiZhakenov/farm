@@ -37,10 +37,10 @@ NICHE_KEYS: dict[str, tuple[str, ...]] = {
         "gilmore", "academia", "book", "journal", "study", "library", "reading",
     ),
     "cozy": (
-        "cozy", "bed", "bedroom", "pajamas", "golden hour", "candle", "messy bed", "coffee cup",
+        "cozy", "bed", "bedroom", "pajamas", "golden hour", "candle", "coffee cup",
     ),
     "bed": (
-        "bed", "bedroom", "pajamas", "messy bed", "reading", "duvet",
+        "bed", "bedroom", "pajamas", "reading", "duvet",
     ),
     "relationships": (
         "couple", "relationship", "date", "sunset walk", "bar",
@@ -91,7 +91,7 @@ _DEFAULT_BY_NICHE: dict[str, list[str]] = {
     ],
     "study": [
         "open journal pen",
-        "spilled coffee laptop",
+        "coffee mug laptop",
         "stacked books lamp",
         "highlighter notebook desk",
         "laptop charger cord",
@@ -99,7 +99,7 @@ _DEFAULT_BY_NICHE: dict[str, list[str]] = {
     "intellectual": [
         "open journal pen",
         "stacked books lamp",
-        "spilled coffee laptop",
+        "coffee mug laptop",
     ],
     "cozy": [
         "tea mug window",
@@ -128,10 +128,10 @@ _DEFAULT_BY_NICHE: dict[str, list[str]] = {
         "hands holding steering wheel",
         "rain on window",
         "fridge open snack",
-        "spilled coffee laptop",
+        "coffee mug laptop",
     ],
     "career": [
-        "spilled coffee laptop",
+        "coffee mug laptop",
         "laptop charger cord",
         "keys on table",
         "open notebook desk",
@@ -139,7 +139,7 @@ _DEFAULT_BY_NICHE: dict[str, list[str]] = {
     "self improvement": [
         "gym mirror selfie shoes",
         "open journal pen",
-        "spilled coffee laptop",
+        "coffee mug laptop",
         "sneakers by door",
     ],
 }
@@ -315,8 +315,8 @@ class QueryPatternManager:
             "beauty": ("skincare", "glow", "vanity", "clean girl"),
             "study": ("gilmore", "academia", "book", "journal", "study", "library", "reading"),
             "intellectual": ("gilmore", "academia", "book", "journal"),
-            "cozy": ("cozy", "bedroom", "pajamas", "golden hour", "messy bed", "candle"),
-            "bed": ("bed", "bedroom", "pajamas", "messy bed"),
+            "cozy": ("cozy", "bedroom", "pajamas", "golden hour", "candle"),
+            "bed": ("bed", "bedroom", "pajamas"),
             "relationships": ("couple", "relationship", "date"),
             "dating": ("couple", "relationship", "date"),
             "night": ("night city", "street", "90s moody", "pov car", "window"),

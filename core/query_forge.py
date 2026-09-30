@@ -60,11 +60,10 @@ _PROP_PHRASES: tuple[tuple[str, str], ...] = (
     ("ice cream", "ice cream pint"),
     ("food scale", "food scale kitchen"),
     ("protein shake", "protein shake gym"),
-    ("takeout box", "takeout box trash"),
-    ("trash can", "trash can lunch"),
-    ("kitchen counter", "kitchen counter mess"),
+    ("takeout box", "takeout box table"),
+    ("kitchen counter", "kitchen counter night"),
     ("open fridge", "open fridge night"),
-    ("empty plate", "empty plate crumbs"),
+    ("empty plate", "empty plate table"),
     ("meal plan", "meal plan calendar"),
     ("gym bag", "gym bag floor"),
     ("yoga mat", "yoga mat floor"),
@@ -87,20 +86,19 @@ _PROP_PHRASES: tuple[tuple[str, str], ...] = (
     ("pretzel bag", "pretzel chips bag night"),
     ("pretzels", "pretzel chips bag night"),
     ("pretzel", "pretzel chips bag night"),
-    ("pasta", "pasta over sink"),
-    ("noodles", "noodles over sink"),
+    ("pasta", "pasta bowl table"),
+    ("noodles", "noodles bowl table"),
     ("ramen", "ramen bowl desk"),
     ("pizza", "pizza box counter"),
-    ("sink", "eating over sink"),
+    ("sink", "kitchen sink window"),
     ("counter", "standing kitchen counter"),
     ("scale", "food scale kitchen"),
     ("laptop", "laptop snacks desk"),
     ("calendar", "calendar meal planning"),
-    ("notebook", "messy notebook scribbles"),
+    ("notebook", "notebook pen desk"),
     ("journal", "open journal desk"),
-    ("plate", "empty plate crumbs"),
-    ("crumbs", "empty plate crumbs"),
-    ("wrappers", "snack wrappers table"),
+    ("plate", "plate of food table"),
+    ("wrappers", "snack bag table"),
     ("gym", "gym bag locker"),
     ("workout", "gym bag floor"),
     ("locker", "gym locker sneakers"),
@@ -109,7 +107,7 @@ _PROP_PHRASES: tuple[tuple[str, str], ...] = (
     ("tea", "tea mug window"),
     ("water bottle", "water bottle gym"),
     ("phone", "phone notes screen"),
-    ("desk", "messy desk night"),
+    ("desk", "desk lamp night"),
     ("kitchen", "kitchen counter night"),
     # reflection / vibe scenes (body-check, disconnection, look-up)
     ("storefront", "silhouette storefront window"),
@@ -139,12 +137,8 @@ _ACTION_CUES: tuple[tuple[str, str], ...] = (
     ("staring", "staring"),
     ("weighing", "weighing"),
     ("counting", "counting"),
-    ("binge", "messy"),
-    ("demolish", "messy"),
-    ("spiral", "messy"),
     ("procrastinat", "procrastinating"),
     ("skip", "skipped"),
-    ("over the sink", "over sink"),
     ("over the counter", "over counter"),
     ("10pm", "night"),
     ("midnight", "night"),
@@ -539,8 +533,8 @@ def _extract_action(blob: str) -> str:
     for key, act in _ACTION_CUES:
         if key in low:
             return act
-    if any(c in low for c in _MESS_CUES):
-        return "messy"
+    # Раньше binge/trash/midnight -> "messy": тянуло грязную посуду и мусор
+    # (фидбек 2026-09-29). Теперь «беспорядочные» темы не добавляют слов.
     if any(c in low for c in _RESTRICT_CUES):
         return "weighing"
     return ""
@@ -568,7 +562,7 @@ def _valence_tail(blob: str) -> str:
     mess = sum(1 for c in _MESS_CUES if c in low)
     rest = sum(1 for c in _RESTRICT_CUES if c in low)
     if mess > rest and mess > 0:
-        return "night" if "night" in low or "10pm" in low or "midnight" in low else "messy"
+        return "night" if "night" in low or "10pm" in low or "midnight" in low else ""
     if rest > 0:
         return "kitchen"
     return ""
@@ -586,7 +580,7 @@ def _clamp(words: Iterable[str], *, max_w: int = 4) -> str:
         # skip tokens already covered as substring of a kept multi-word chunk
         if any(low in s or s in low for s in seen if len(s) > 2):
             # still allow distinct short place words
-            if low not in {"night", "desk", "floor", "kitchen", "messy"}:
+            if low not in {"night", "desk", "floor", "kitchen"}:
                 continue
         seen.add(low)
         out.append(low)
@@ -935,36 +929,36 @@ _EASY_MOOD_BANKS: dict[str, tuple[str, ...]] = {
     "food_night": (
         "open fridge night phone",
         "snack bags bed night",
-        "kitchen counter night mess",
+        "kitchen counter night",
         "empty plate table night",
         "chip bag couch night",
         "phone torch pantry shelf",
     ),
     # diet / wellness / meal-prep pressure (soften away from stock meal-prep)
     "food_control": (
-        "messy kitchen sink dishes",
+        "fruit bowl kitchen table",
         "tea mug kitchen morning",
         "grocery bags floor hallway",
         "empty plate table night",
-        "hands washing dishes sink",
-        "kitchen counter night mess",
+        "hands holding tea mug",
+        "kitchen counter night",
     ),
     # bed / doomscroll / can't sleep / phone spiral
     "bed_spiral": (
         "phone on pillow night",
         "hands holding phone bed",
-        "messy bed laptop night",
+        "laptop bed night",
         "water glass nightstand dark",
         "socks on bed candid",
         "laptop bed evening candid",
     ),
     # work / school / laptop guilt / procrastination
     "desk_work": (
-        "messy desk phone night",
+        "desk phone night",
         "laptop charger cord desk",
         "open notebook pen desk",
         "hands typing laptop night",
-        "spilled coffee laptop desk",
+        "coffee mug laptop desk",
         "sticky notes laptop desk",
     ),
     # city loneliness / walking it off / leaving the house
@@ -989,8 +983,8 @@ _EASY_MOOD_BANKS: dict[str, tuple[str, ...]] = {
     "general": (
         "hands holding phone bed",
         "rainy window city night",
-        "messy desk phone night",
-        "kitchen counter night mess",
+        "desk phone night",
+        "kitchen counter night",
         "feet sneakers pavement walk",
         "tea mug window morning",
         "keys on table hallway",
@@ -1053,6 +1047,101 @@ STYLE_PIVOT_QUERIES: tuple[str, ...] = tuple(
     )
 )
 
+# Concrete subjects: if a query with these failed, do NOT retry same subject
+# (almond hand → almond tree / almonds desk). Ambient words (kitchen, night,
+# window, desk…) stay allowed so style-pivot can jump to a different scene.
+_CONCRETE_SUBJECT_STEMS: frozenset[str] = frozenset(
+    {
+        "almond",
+        "almonds",
+        "spinach",
+        "quinoa",
+        "smoothie",
+        "pasta",
+        "noodles",
+        "ramen",
+        "pizza",
+        "chips",
+        "chip",
+        "snack",
+        "snacks",
+        "salad",
+        "fridge",
+        "refrigerator",
+        "freezer",
+        "pantry",
+        "scale",
+        "pretzel",
+        "pretzels",
+        "cereal",
+        "cookie",
+        "oreo",
+        "yogurt",
+        "wrappers",
+        "crumbs",
+        "calories",
+        "calorie",
+        "macros",
+        "protein",
+        "shake",
+        "takeout",
+        "ice",  # ice cream — matched with cream via phrase; keep cream too
+        "cream",
+        "gym",
+        "treadmill",
+        "yoga",
+        "sneakers",  # borderline; still a strong subject when gym failed
+        "mirror",
+        "silhouette",
+        "reflection",
+        "storefront",
+    }
+)
+
+
+def _norm_subject_stem(token: str) -> str:
+    t = (token or "").lower().strip()
+    if t.endswith("ies") and len(t) > 4:
+        return t[:-3] + "y"
+    if t.endswith("s") and len(t) > 3 and not t.endswith("ss"):
+        return t[:-1]
+    return t
+
+
+def banned_subject_stems(
+    avoid_queries: Iterable[str] | None = None,
+) -> set[str]:
+    """Prop stems from already-failed queries (almond, fridge, scale…)."""
+    banned: set[str] = set()
+    for q in avoid_queries or ():
+        low = (q or "").lower()
+        if not low.strip():
+            continue
+        for stem in _CONCRETE_SUBJECT_STEMS:
+            if re.search(rf"\b{re.escape(stem)}\b", low):
+                banned.add(_norm_subject_stem(stem))
+    return banned
+
+
+def query_hits_banned_subject(
+    query: str,
+    banned: set[str] | frozenset[str] | None,
+) -> bool:
+    """True if query still revolves around a failed concrete subject."""
+    if not banned:
+        return False
+    low = (query or "").lower()
+    if not low.strip():
+        return False
+    for stem in banned:
+        if not stem:
+            continue
+        if re.search(rf"\b{re.escape(stem)}\b", low):
+            return True
+        if re.search(rf"\b{re.escape(stem)}s\b", low):
+            return True
+    return False
+
 
 def _mood_buckets_for_text(blob: str) -> list[str]:
     """Ordered mood buckets that fit the slide text / topic (best match first)."""
@@ -1114,10 +1203,31 @@ def style_pivot_queries(
     from core.harvester import finalize_photo_query
 
     avoid_l = {(a or "").strip().lower() for a in (avoid or ()) if a}
+    banned = banned_subject_stems(avoid_l)
     blob = " ".join(
         x for x in (seed_text, slide_text, visual_scene, topic) if x
     ).lower()
     buckets = _mood_buckets_for_text(blob)
+    # Failed food props → try bed/desk/city first (totally different subject)
+    if banned & {
+        "almond",
+        "quinoa",
+        "smoothie",
+        "pasta",
+        "scale",
+        "fridge",
+        "pantry",
+        "salad",
+        "chip",
+        "snack",
+        "pretzel",
+        "cereal",
+        "cream",
+    }:
+        deprior = {"food_night", "food_control"}
+        buckets = [b for b in buckets if b not in deprior] + [
+            b for b in buckets if b in deprior
+        ]
 
     ranked: list[tuple[int, int, str]] = []
     seen_raw: set[str] = set()
@@ -1125,6 +1235,8 @@ def style_pivot_queries(
         for qi, raw in enumerate(_EASY_MOOD_BANKS.get(bucket, ())):
             low = raw.lower()
             if low in seen_raw or low in avoid_l:
+                continue
+            if query_hits_banned_subject(raw, banned):
                 continue
             seen_raw.add(low)
             # earlier buckets + higher context overlap win
@@ -1141,6 +1253,8 @@ def style_pivot_queries(
         if not q or len(q.split()) < 2:
             continue
         if query_is_dna_cast(q):
+            continue
+        if query_hits_banned_subject(q, banned):
             continue
         low = q.lower()
         if low in seen:
@@ -1176,30 +1290,37 @@ def vibe_rescue_queries(
     from core.harvester import finalize_photo_query
 
     avoid_l = {(a or "").strip().lower() for a in (avoid or ()) if a}
+    banned = banned_subject_stems(avoid_l)
     blob = f"{visual_scene} {slide_text} {topic}"
     candidates: list[str] = []
 
     # 1) Every concrete prop phrase as its own query angle
     for phrase in _extract_props(blob, limit=4):
-        candidates.append(phrase)
+        if not query_hits_banned_subject(phrase, banned):
+            candidates.append(phrase)
 
     # 2) Action + prop / place remixes
     action = _extract_action(blob)
     place = _valence_tail(blob)
     props = _extract_props(blob, limit=2)
+    props = [p for p in props if not query_hits_banned_subject(p, banned)]
     if action and props:
         candidates.append(f"{action} {props[0]}")
     if props and place:
         candidates.append(f"{props[0]} {place}")
-    if action and place:
+    if action and place and not banned:
         candidates.append(f"{action} {place} kitchen")
 
     # 3) visual_scene noun compress (different cut)
     nouns = _scene_nouns(visual_scene, limit=4)
     if len(nouns) >= 2:
-        candidates.append(" ".join(nouns[:3]))
+        joined = " ".join(nouns[:3])
+        if not query_hits_banned_subject(joined, banned):
+            candidates.append(joined)
         if len(nouns) >= 3:
-            candidates.append(" ".join(nouns[1:4]))
+            joined2 = " ".join(nouns[1:4])
+            if not query_hits_banned_subject(joined2, banned):
+                candidates.append(joined2)
 
     # 4) High-signal confession props as short queries
     for key in (
@@ -1219,6 +1340,8 @@ def vibe_rescue_queries(
         "sneakers",
         "counter",
     ):
+        if query_hits_banned_subject(key, banned):
+            continue
         if re.search(rf"\b{key}\b", blob, flags=re.I):
             if key in ("pantry", "fridge"):
                 candidates.append(f"open {key} night")
@@ -1251,6 +1374,8 @@ def vibe_rescue_queries(
             continue
         if query_is_dna_cast(q):
             continue
+        if query_hits_banned_subject(q, banned):
+            continue
         low = q.lower()
         if low in seen:
             continue
@@ -1274,6 +1399,8 @@ def vibe_rescue_queries(
         ):
             low = pq.lower()
             if low in seen:
+                continue
+            if query_hits_banned_subject(pq, banned):
                 continue
             seen.add(low)
             out.append(pq)

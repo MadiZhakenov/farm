@@ -1569,14 +1569,40 @@ class CarouselFactoryApp:
         total_ai = 0
         total_bytes = 0
 
+        # Серия: фото, уже стоящие в других каруселях, не берём
+        from core.carousel_rules import (
+            RULES_ENABLED,
+            UsedIndex,
+            build_photo_plans,
+            enforce_carousel_rules,
+        )
+
+        try:
+            used_index = get_photo_vault().used_index()
+            self.harvester.seed_used(used_index.pins)
+        except Exception as exc:
+            print(f"[series] учёт фото недоступен: {exc}")
+            used_index = UsedIndex()
+        topic_ui = (self._topics_from_ui() or [""])[0]
+        scene_specs = []
+        for i, text in enumerate(lines):
+            if queries and i < len(queries) and queries[i].strip():
+                q0 = finalize_photo_query(queries[i].strip(), i, slide_text=text)
+            else:
+                q0 = aesthetic_query_for_slide(text, i)
+            scene_specs.append((q0, "", []))
+        # Роли: 1-й по сценарию, середина чередуется с нейтральными, финал приятный
+        plans, heavy = build_photo_plans(
+            lines, scene_specs, topic=topic_ui, seed=time.time_ns(),
+            enabled=RULES_ENABLED,
+        )
+        roles = [p.role for p in plans]
+
         try:
             for i, text in enumerate(lines):
-                if queries and i < len(queries) and queries[i].strip():
-                    query = finalize_photo_query(
-                        queries[i].strip(), i, slide_text=text
-                    )
-                else:
-                    query = aesthetic_query_for_slide(text, i)
+                plan = plans[i]
+                query = plan.query
+                search_text = plan.search_text if plan.role != "scene" else text
                 self._set_status(
                     f"Слайд {i + 1}/{len(lines)} · запрос: {query}"
                 )
@@ -1588,11 +1614,13 @@ class CarouselFactoryApp:
                 # Цепочка альтернатив: пустой слайд недопустим
                 cands, prog, used_q = self.harvester.harvest_until_filled(
                     query,
-                    slide_text=text,
+                    slide_text=search_text,
                     slide_index=i,
                     limit=CANDIDATES,
                     min_keep=max(1, MIN_KEEP),
                     anchor_image=anchor_img,
+                    visual_scene=plan.visual_scene,
+                    alt_queries=list(plan.alts),
                 )
                 total_ai += prog.ai_rejected
                 total_bytes += prog.bytes_total
@@ -1610,7 +1638,7 @@ class CarouselFactoryApp:
                     )
                     raw, prog2, used2 = self.harvester.harvest_until_filled(
                         query,
-                        slide_text=text,
+                        slide_text=search_text,
                         slide_index=i,
                         limit=CANDIDATES,
                         min_keep=1,
@@ -1623,7 +1651,7 @@ class CarouselFactoryApp:
                     if raw:
                         cands = self.harvester.rank_pool_emergency(
                             raw,
-                            slide_text=text,
+                            slide_text=search_text,
                             query=used2 or query,
                             limit=CANDIDATES,
                         )
@@ -1632,7 +1660,7 @@ class CarouselFactoryApp:
 
                 if not cands:
                     g_kept, g_q = self.harvester.guarantee_at_least_one(
-                        slide_text=text,
+                        slide_text=search_text,
                         slide_index=i,
                         preferred_query=query,
                         limit=max(1, MIN_KEEP),
@@ -1671,6 +1699,12 @@ class CarouselFactoryApp:
             # Вкус уже отсортировал кадры; гармония — тай-брейк.
             self._set_status("Смысл + UGC + Color Matcher ranking…")
             _apply_color_harmony(slides)
+            self._rule_results = []
+            if RULES_ENABLED:
+                self._set_status("Правила карусели (грязь / место / повторы)…")
+                self._rule_results = enforce_carousel_rules(
+                    slides, roles=roles, heavy=heavy, used=used_index
+                )
         except Exception as exc:
             self._set_status(f"Ошибка: {exc}")
             self._set_busy(False)
@@ -2444,6 +2478,12 @@ class CarouselFactoryApp:
                             float(getattr(cand, "combined_score", 0) or 0), 4
                         ),
                         "is_anchor": slide.index == 0,
+                        **(
+                            self._rule_results[slide.index].to_meta()
+                            if slide.index < len(getattr(self, "_rule_results", []) or [])
+                            and slide.selected == 0
+                            else {}
+                        ),
                         "harmony_score": harm,
                         "color_mood": prof.get("mood"),
                         "color_profile": {
@@ -2474,9 +2514,10 @@ class CarouselFactoryApp:
             (out / "caption.txt").write_text(caption + "\n", encoding="utf-8")
             self._last_export = out
 
-            # PhotoVault: финальные фото -> библиотека
+            # PhotoVault: финальные фото -> библиотека + учёт серии
             try:
                 vault_items: list[dict[str, Any]] = []
+                carousel_key = str(out.resolve())
                 for slide in self._slides:
                     cand = slide.selected_candidate()
                     if cand is None or not cand.pin_id:
@@ -2488,6 +2529,8 @@ class CarouselFactoryApp:
                             "query": slide.query,
                             "image_url": getattr(cand, "source_url", "") or "",
                             "tags": (self._topics_from_ui() or [""])[0],
+                            "carousel": carousel_key,
+                            "slide": slide.index + 1,
                         }
                     )
                 if vault_items:

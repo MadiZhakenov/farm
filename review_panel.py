@@ -77,6 +77,186 @@ def _pil_fingerprint(im: Image.Image) -> str:
         return hashlib.md5(tiny.tobytes()).hexdigest()
     except Exception:
         return ""
+
+
+def _carousel_key(folder: Path) -> str:
+    """Тот же ключ, что пишет batch_factory в учёт серии."""
+    try:
+        return str(folder.resolve())
+    except OSError:
+        return str(folder)
+
+
+def _own_pins(meta: dict) -> set[str]:
+    """Все pin_id этой карусели: финалы и сохранённые варианты."""
+    out: set[str] = set()
+    for sl in meta.get("slides") or []:
+        if not isinstance(sl, dict):
+            continue
+        if sl.get("pin_id"):
+            out.add(str(sl["pin_id"]))
+        out |= {str(p) for p in (sl.get("alt_pin_ids") or []) if p}
+        out |= {str(p) for p in (sl.get("alt_pins") or {}).values() if p}
+    return out
+
+
+def _series_used_index(folder: Path, meta: dict | None = None):
+    """Фото, стоящие в ДРУГИХ каруселях серии (или None, если учёт недоступен)."""
+    try:
+        from core.photo_vault import get_photo_vault
+
+        return get_photo_vault().used_index(
+            exclude_carousel=_carousel_key(folder),
+            exclude_pins=_own_pins(meta or {}),
+        )
+    except Exception as exc:
+        print(f"[review] учёт серии недоступен: {exc}")
+        return None
+
+
+def _carousel_gender(meta: dict, folder: Path) -> str | None:
+    """
+    Пол карусели: из character_dna, иначе по фото 1-го слайда
+    (только если на нём виден человек). Кэшируется в meta['gender_lock'].
+    """
+    cached = str(meta.get("gender_lock") or "").lower()
+    if cached in ("female", "male", "none"):
+        return None if cached == "none" else cached
+    dna = meta.get("character_dna") or {}
+    g = str(dna.get("gender") or "").lower() if isinstance(dna, dict) else ""
+    if g not in ("female", "male"):
+        g = ""
+        try:
+            from core.harvester import image_has_visible_person, infer_carousel_gender
+
+            slides = meta.get("slides") or []
+            sel = int((slides[0] or {}).get("selected_alt") or 0) if slides else 0
+            src = folder / "alts" / f"1_{sel}.jpg"
+            if not src.is_file():
+                src = folder / "alts" / "1_0.jpg"
+            if src.is_file():
+                with Image.open(src) as im0:
+                    im0 = im0.convert("RGB")
+                    if image_has_visible_person(im0):
+                        g = infer_carousel_gender(im0)
+        except Exception as exc:
+            print(f"[review] gender infer skip: {exc}")
+    meta["gender_lock"] = g or "none"
+    return g or None
+
+
+def _gender_clash(image: Image.Image, gender: str | None, title: str = "") -> bool:
+    """Та же проверка пола, что в автоподборе (gender_mismatches_lock)."""
+    if gender not in ("female", "male"):
+        return False
+    try:
+        from core.harvester import gender_mismatches_lock, image_has_visible_person
+
+        if not image_has_visible_person(image):
+            return False
+        return bool(gender_mismatches_lock(image, gender, title))
+    except Exception as exc:
+        print(f"[review] gender check skip: {exc}")
+        return False
+
+
+def _slide_photo_role(meta: dict, slide_idx: int) -> str:
+    roles = meta.get("photo_roles") or []
+    if 0 <= slide_idx < len(roles) and roles[slide_idx]:
+        return str(roles[slide_idx])
+    slides = meta.get("slides") or []
+    if 0 <= slide_idx < len(slides) and isinstance(slides[slide_idx], dict):
+        return str(slides[slide_idx].get("photo_role") or "scene")
+    return "scene"
+
+
+def _carousel_place_mess(meta: dict, exclude_slide_idx: int) -> tuple[Any, int, bool]:
+    """Места и грязь на ДРУГИХ слайдах текущей карусели (из meta)."""
+    from collections import Counter
+
+    from core.carousel_rules import LIMITED_PLACES
+
+    places: Counter[str] = Counter()
+    mess_used = 0
+    for i, s in enumerate(meta.get("slides") or []):
+        if i == exclude_slide_idx or not isinstance(s, dict):
+            continue
+        pl = str(s.get("place") or "other")
+        if pl in LIMITED_PLACES:
+            places[pl] += 1
+        if s.get("is_mess"):
+            mess_used += 1
+    return places, mess_used, bool(meta.get("heavy_topic"))
+
+
+def _alt_breaks_rules(
+    image: Image.Image,
+    meta: dict,
+    slide_idx: int,
+    *,
+    classifier: Any = None,
+) -> str:
+    """
+    Почему alt не подходит под правила карусели (пустая строка = ок).
+    Финал: никогда грязь. Лимит грязи / одного места — как в автоподборе.
+    """
+    try:
+        from core.carousel_rules import (
+            LIMITED_PLACES,
+            MAX_MESS_HEAVY,
+            MAX_MESS_NORMAL,
+            MAX_SAME_PLACE,
+            ROLE_FINAL,
+            _cand_features,
+            get_photo_classifier,
+        )
+
+        role = _slide_photo_role(meta, slide_idx)
+        places, mess_used, heavy = _carousel_place_mess(meta, slide_idx)
+        budget = MAX_MESS_HEAVY if heavy else MAX_MESS_NORMAL
+        n = len(meta.get("slides") or [])
+        is_final = role == ROLE_FINAL or (n > 1 and slide_idx == n - 1)
+
+        class _Cand:
+            pass
+
+        c = _Cand()
+        c.image = image
+        c.pin_id = ""
+        f = _cand_features(c, classifier or get_photo_classifier())
+        if is_final and f.is_mess:
+            return "грязь на финале"
+        if f.is_mess and mess_used >= budget:
+            return f"лимит грязи ({mess_used}/{budget})"
+        if f.place in LIMITED_PLACES and places[f.place] >= MAX_SAME_PLACE:
+            return f"место «{f.place}» уже {places[f.place]}×"
+        return ""
+    except Exception as exc:
+        print(f"[review] rules check skip: {exc}")
+        return ""
+
+
+def _role_query_hint(meta: dict, slide_idx: int, slide_text: str = "") -> str:
+    """Для neutral/final подсказать спокойный запрос, если текущий пустой."""
+    role = _slide_photo_role(meta, slide_idx)
+    if role not in ("neutral", "final"):
+        return ""
+    try:
+        from core.carousel_rules import neutral_plan
+
+        plan = neutral_plan(
+            role,
+            topic=str(meta.get("topic") or ""),
+            slide_text=slide_text,
+            slide_index=slide_idx,
+            heavy=bool(meta.get("heavy_topic")),
+            seed=f"review:{slide_idx}",
+        )
+        return str(getattr(plan, "query", "") or "")
+    except Exception:
+        return ""
+
+
 _VK_DELETE = 46
 _VK_BACK = 8
 _VK_A = 65
@@ -876,14 +1056,25 @@ class ReviewPanel(ttk.Frame):
             return
         row = self.rows[row_idx]
         query = self._query_var.get().strip()
-        if not query:
-            messagebox.showinfo("Query", "Введи Pinterest-запрос (2–3 слова).")
-            return
-
-        # сохранить query в meta
         meta_slides = row.meta.setdefault("slides", [])
         while len(meta_slides) <= slide_idx:
             meta_slides.append({})
+        entry0 = meta_slides[slide_idx] if slide_idx < len(meta_slides) else {}
+        if not query:
+            # neutral/final: подставить спокойный запрос под роль слайда
+            hint = _role_query_hint(
+                row.meta,
+                slide_idx,
+                str((entry0 or {}).get("text") or ""),
+            )
+            if hint:
+                query = hint
+                self._query_var.set(hint)
+            else:
+                messagebox.showinfo("Query", "Введи Pinterest-запрос (2–3 слова).")
+                return
+
+        # сохранить query в meta
         meta_slides[slide_idx]["query"] = query
         try:
             (row.path / "meta.json").write_text(
@@ -903,6 +1094,9 @@ class ReviewPanel(ttk.Frame):
             err = ""
             added = 0
             skipped_dup = 0
+            skipped_series = 0
+            skipped_gender = 0
+            skipped_rules = 0
             downloaded = 0
             hq = query
             auto_retried = False
@@ -942,11 +1136,28 @@ class ReviewPanel(ttk.Frame):
                 for pid in entry.get("alt_pin_ids") or []:
                     if pid:
                         exclude.add(str(pid))
+                # Фото других слайдов этой же карусели тоже не предлагаем
+                for other in meta_slides:
+                    if isinstance(other, dict) and other.get("pin_id"):
+                        exclude.add(str(other["pin_id"]))
                 known_fps = {
                     fp
                     for fp in (_img_fingerprint(p) for p in existing)
                     if fp
                 }
+                # Серия: фото из других каруселей не предлагаем (фидбек 2026-09-29)
+                series_used = _series_used_index(row.path, row.meta)
+                series_pins = set(series_used.pins) if series_used else set()
+                # Пол: та же проверка, что в автоподборе
+                gender_lock = _carousel_gender(row.meta, row.path)
+                # Правила карусели: роль / грязь / место (как в автоподборе)
+                photo_role = _slide_photo_role(row.meta, slide_idx)
+                try:
+                    from core.carousel_rules import get_photo_classifier
+
+                    rules_clf = get_photo_classifier()
+                except Exception:
+                    rules_clf = None
 
                 want_n = FETCH_FIND_N if replace_query else FETCH_MORE_N
                 slide_text = str(entry.get("text") or "")
@@ -966,7 +1177,7 @@ class ReviewPanel(ttk.Frame):
                     raw_local, _p = harv.harvest_for_query(
                         q_try,
                         limit=fl,
-                        exclude_ids=exclude,
+                        exclude_ids=exclude | series_pins,
                         slide_text=slide_text,
                         slide_index=slide_idx,
                         ignore_used=True,
@@ -1112,6 +1323,9 @@ class ReviewPanel(ttk.Frame):
                 alt_pin_ids = [
                     str(p) for p in (entry.get("alt_pin_ids") or []) if p
                 ]
+                alt_pins = dict(entry.get("alt_pins") or {})
+                from core.carousel_rules import image_fingerprint
+
                 for cand in cands:
                     if added >= want_n:
                         break
@@ -1123,10 +1337,36 @@ class ReviewPanel(ttk.Frame):
                     if fp and fp in known_fps:
                         skipped_dup += 1
                         continue
+                    if series_used is not None and series_used.is_used(
+                        pid, image_fingerprint(cand.image)
+                    ):
+                        skipped_series += 1
+                        continue
+                    if _gender_clash(
+                        cand.image, gender_lock, str(getattr(cand, "title", "") or "")
+                    ):
+                        skipped_gender += 1
+                        continue
+                    rule_why = _alt_breaks_rules(
+                        cand.image,
+                        row.meta,
+                        slide_idx,
+                        classifier=rules_clf,
+                    )
+                    if rule_why:
+                        skipped_rules += 1
+                        print(
+                            f"[review-alts] skip rules ({rule_why}) "
+                            f"pin={pid or '?'} role={photo_role}",
+                            flush=True,
+                        )
+                        continue
                     out = alts_dir / f"{slide_n}_{next_i}.jpg"
                     cand.image.convert("RGB").save(
                         out, quality=88, optimize=True
                     )
+                    if pid:
+                        alt_pins[str(next_i)] = pid
                     next_i += 1
                     added += 1
                     if pid:
@@ -1141,6 +1381,7 @@ class ReviewPanel(ttk.Frame):
                     )
                     meta_slides[slide_idx]["query"] = hq or query
                     meta_slides[slide_idx]["alt_pin_ids"] = alt_pin_ids
+                    meta_slides[slide_idx]["alt_pins"] = alt_pins
                     (row.path / "meta.json").write_text(
                         json.dumps(row.meta, ensure_ascii=False, indent=2),
                         encoding="utf-8",
@@ -1166,12 +1407,24 @@ class ReviewPanel(ttk.Frame):
                         )
                     elif skipped_dup:
                         msg += f" (дублей отсеяно {skipped_dup})"
+                    if skipped_series or skipped_gender or skipped_rules:
+                        msg += (
+                            f" (в других каруселях {skipped_series}, "
+                            f"другой пол {skipped_gender}, "
+                            f"правила {skipped_rules})"
+                        )
                     msg += " — смени query"
                     if isinstance(status, tk.Label):
                         status.configure(text=msg)
                     self.on_status(f"Отсмотр: 0 новых для «{query}»")
                 else:
                     extra = f", дублей −{skipped_dup}" if skipped_dup else ""
+                    if skipped_series:
+                        extra += f", уже в других каруселях −{skipped_series}"
+                    if skipped_gender:
+                        extra += f", другой пол −{skipped_gender}"
+                    if skipped_rules:
+                        extra += f", правила −{skipped_rules}"
                     chain_note = (
                         f" · auto×{tried_n}" if auto_retried else ""
                     )
@@ -1224,14 +1477,77 @@ class ReviewPanel(ttk.Frame):
         if slide_idx < len(meta_slides):
             entry = meta_slides[slide_idx]
             text = str(entry.get("text") or "")
+        alt_pin = ""
+        if entry is not None:
+            alt_pin = str((entry.get("alt_pins") or {}).get(str(alt_i)) or "")
+            if not alt_pin:
+                ids = [str(p) for p in (entry.get("alt_pin_ids") or []) if p]
+                if 0 <= alt_i < len(ids):
+                    alt_pin = ids[alt_i]
         try:
             bg = Image.open(alt_path).convert("RGB")
+            # Проверки как в автоподборе: пол и «одно фото — одна карусель»
+            from core.carousel_rules import image_fingerprint
+
+            gender_lock = _carousel_gender(row.meta, row.path)
+            if _gender_clash(bg, gender_lock) and not messagebox.askyesno(
+                "Другой пол",
+                "На этом фото, похоже, человек другого пола, чем в карусели "
+                f"({'женский' if gender_lock == 'female' else 'мужской'}).\n"
+                "Всё равно поставить?",
+            ):
+                return
+            series_used = _series_used_index(row.path, row.meta)
+            if series_used is not None and series_used.is_used(
+                alt_pin, image_fingerprint(bg)
+            ) and not messagebox.askyesno(
+                "Фото уже используется",
+                "Это фото уже стоит в другой карусели серии.\n"
+                "Всё равно поставить?",
+            ):
+                return
+            rule_why = _alt_breaks_rules(bg, row.meta, slide_idx)
+            if rule_why and not messagebox.askyesno(
+                "Правила карусели",
+                f"Это фото ломает правило: {rule_why}.\n"
+                f"Роль слайда: {_slide_photo_role(row.meta, slide_idx)}.\n"
+                "Всё равно поставить?",
+            ):
+                return
+            # обновить place/mess в meta после выбора
+            try:
+                from core.carousel_rules import _cand_features, get_photo_classifier
+
+                class _Cand:
+                    pass
+
+                c = _Cand()
+                c.image = bg
+                c.pin_id = alt_pin
+                feat = _cand_features(c, get_photo_classifier())
+            except Exception:
+                feat = None
             rendered, rmeta = render_slide(bg, text)
             rendered.save(slide_path, quality=92, optimize=True)
+            try:
+                from core.photo_vault import get_photo_vault
+
+                get_photo_vault().register_usage(
+                    _carousel_key(row.path), slide_n, pin_id=alt_pin, image=bg
+                )
+            except Exception as exc:
+                print(f"[review] usage register skip: {exc}")
             del rendered, bg
             if entry is not None:
                 entry["selected_alt"] = alt_i
                 entry["slot"] = getattr(rmeta, "slot", None)
+                if alt_pin:
+                    entry["pin_id"] = alt_pin
+                if feat is not None:
+                    entry["photo_role"] = _slide_photo_role(row.meta, slide_idx)
+                    entry["is_mess"] = bool(feat.is_mess)
+                    entry["mess_score"] = round(float(feat.mess), 4)
+                    entry["place"] = str(feat.place or "other")
                 meta_path = row.path / "meta.json"
                 meta_path.write_text(
                     json.dumps(row.meta, ensure_ascii=False, indent=2),

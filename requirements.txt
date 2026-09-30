@@ -15,4 +15,5 @@ yt-dlp>=2024.8.6
 pandas>=2.0.0
 youtube-transcript-api>=1.0.0
 transformers>=4.46.0
+sentencepiece>=0.2.0   # без него SigLIP не грузится (тихо уходит на CLIP)
 # torch: локальный SigLIP/CLIP. Если нужен GPU, ставь сборку CUDA и не затирай уже установленный torch+cu.

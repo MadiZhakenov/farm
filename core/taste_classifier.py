@@ -105,20 +105,46 @@ class TasteClassifier:
         scores = self.predict_taste_scores([image])
         return scores[0] if scores else 0.5
 
-    def predict_taste_scores(self, images: list[Image.Image]) -> list[float]:
+    def predict_taste_scores(
+        self,
+        images: list[Image.Image],
+        *,
+        cache_keys: list[str | None] | None = None,
+        image_vecs: np.ndarray | None = None,
+    ) -> list[float]:
         self._reload_if_needed()
-        if self._clf is None or not images:
-            return [0.5] * len(images)
-
-        from core.taste_embedder import get_embedder
-
-        embedder = get_embedder()
-        embedder.ensure(self._backend or None)
-        if self._backend and embedder.backend_id != self._backend:
-            raise RuntimeError(
-                f"эмбеддер {embedder.backend_id} не совпадает с обучением ({self._backend})"
+        if self._clf is None or (not images and image_vecs is None):
+            n = len(images) if images else (
+                0 if image_vecs is None else len(image_vecs)
             )
-        vecs = embedder.embed_images(images)
+            return [0.5] * n
+
+        if image_vecs is None:
+            from core.taste_embedder import get_embedder
+
+            embedder = get_embedder()
+            embedder.ensure(self._backend or None)
+            if self._backend and embedder.backend_id != self._backend:
+                raise RuntimeError(
+                    f"эмбеддер {embedder.backend_id} не совпадает с обучением ({self._backend})"
+                )
+            vecs = embedder.embed_images(images, cache_keys=cache_keys)
+            if self._dim and vecs.shape[1] != self._dim:
+                raise RuntimeError(
+                    f"размерность {vecs.shape[1]} != обученной {self._dim}"
+                )
+        else:
+            vecs = np.asarray(image_vecs, dtype=np.float32)
+            if self._dim and vecs.shape[1] != self._dim:
+                raise RuntimeError(
+                    f"размерность {vecs.shape[1]} != обученной {self._dim}"
+                )
+        return self.predict_taste_scores_from_vecs(vecs)
+
+    def predict_taste_scores_from_vecs(self, vecs: np.ndarray) -> list[float]:
+        self._reload_if_needed()
+        if self._clf is None or vecs is None or len(vecs) == 0:
+            return [0.5] * (0 if vecs is None else len(vecs))
         if self._dim and vecs.shape[1] != self._dim:
             raise RuntimeError(
                 f"размерность {vecs.shape[1]} != обученной {self._dim}"
@@ -126,7 +152,7 @@ class TasteClassifier:
         proba = self._clf.predict_proba(vecs)
         classes = list(self._clf.classes_)
         if 1 not in classes:
-            return [0.5] * len(images)
+            return [0.5] * len(vecs)
         col = classes.index(1)
         out = np.clip(proba[:, col], 0.0, 1.0)
         return [float(v) for v in out]

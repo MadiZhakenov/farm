@@ -55,14 +55,11 @@ def _heuristic_caption(
         )
     else:
         cta = "Save this for tomorrow morning. You'll need the reminder."
-    tags = (
-        "#productivity #discipline #focus #habits #selfgrowth #mindset #motivation"
-    )
-    low = f"{topic} {hook}".lower()
-    if "burn" in low or "lazy" in low or "procrast" in low:
-        tags = "#productivity #discipline #focus #procrastination #habits #selfgrowth #mindset"
-    elif "anxiety" in low or "mental" in low or "emotion" in low or "boundar" in low:
-        tags = "#mentalhealth #healing #selfawareness #mindset #growth #habits #boundaries"
+    # Хештеги по нише темы (раньше почти всегда был #productivity,
+    # даже в каруселях про еду и тело — фидбек 2026-09-29)
+    from core.niches import hashtags_for
+
+    tags = hashtags_for(topic, slides)
     return "\n".join([hook, essence, cta, tags])
 
 
@@ -92,7 +89,9 @@ def _format_caption(data: dict[str, Any], slides: list[str], topic: str) -> str 
     if not essence or not cta or not tags:
         return None
     if "#" not in tags:
-        tags = "#productivity #discipline #focus #habits #selfgrowth"
+        from core.niches import hashtags_for
+
+        tags = hashtags_for(topic, slides)
     return "\n".join([hook, essence, cta, tags])
 
 

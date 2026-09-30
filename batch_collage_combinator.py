@@ -51,6 +51,8 @@ OUT_ROOT = ROOT / "out" / "collages_10k"
 
 CATEGORIES = ("pillows", "brushes", "products", "hairlines")
 ITEM_KEYS = ("pillow", "brush", "product", "hairline")
+# How many images per category enter the recipe space (indices 0..POOL_SIZE-1)
+POOL_SIZE = 20
 
 # Base caption text (slot number is prepended at render time)
 ITEM_LABELS: dict[str, str] = {
@@ -197,7 +199,7 @@ def _list_images(folder: Path) -> list[Path]:
     return files
 
 
-def _cycle_to_n(files: list[Path], n: int = 10) -> list[Path]:
+def _cycle_to_n(files: list[Path], n: int = POOL_SIZE) -> list[Path]:
     if not files:
         return []
     out: list[Path] = []
@@ -209,7 +211,7 @@ def _cycle_to_n(files: list[Path], n: int = 10) -> list[Path]:
 
 
 def _fallback_pools(flat_dir: Path) -> dict[str, list[Path]]:
-    """Build 4 pools of 10 from a flat folder (or project scans)."""
+    """Build 4 pools of POOL_SIZE from a flat folder (or project scans)."""
     files = _list_images(flat_dir)
     if not files:
         files = sorted(
@@ -250,15 +252,15 @@ def _fallback_pools(flat_dir: Path) -> dict[str, list[Path]]:
     for cat in CATEGORIES:
         if not pools[cat]:
             pools[cat] = [leftover[abs(hash(cat)) % len(leftover)]]
-        pools[cat] = _cycle_to_n(pools[cat], 10)
+        pools[cat] = _cycle_to_n(pools[cat], POOL_SIZE)
 
     return pools
 
 
 def load_asset_pools(assets_dir: Path, fallback_dir: Path) -> dict[str, list[Path]]:
     """
-    Prefer assets/{pillows,brushes,products,hairlines}/01..10.jpg
-    Else invent pools from fallback_dir (cycled to 10 each).
+    Prefer assets/{pillows,brushes,products,hairlines}/*.jpg
+    Else invent pools from fallback_dir (cycled to POOL_SIZE each).
     """
     pools: dict[str, list[Path]] = {}
     structured = True
@@ -268,19 +270,19 @@ def load_asset_pools(assets_dir: Path, fallback_dir: Path) -> dict[str, list[Pat
         if not files:
             structured = False
             break
-        pools[cat] = _cycle_to_n(files, 10)
+        pools[cat] = _cycle_to_n(files, POOL_SIZE)
 
     if structured:
         print(f"Assets: structured pools from {assets_dir}")
         for cat, files in pools.items():
-            print(f"  {cat}: {len(files)} (cycled to 10) e.g. {files[0].name}")
+            print(f"  {cat}: {len(files)} (cycled to {POOL_SIZE}) e.g. {files[0].name}")
         return pools
 
     print(f"Assets: no structured assets/ — fallback from {fallback_dir}")
     pools = _fallback_pools(fallback_dir)
     for cat, files in pools.items():
         uniq = len({str(p) for p in files})
-        print(f"  {cat}: {uniq} unique → 10 slots (cycled) e.g. {files[0].name}")
+        print(f"  {cat}: {uniq} unique -> {POOL_SIZE} slots (cycled) e.g. {files[0].name}")
     return pools
 
 
@@ -291,7 +293,7 @@ class Recipe:
     layout: str
     # item keys for slots 1..3 (permutation of pillow/brush/product)
     slot_items: tuple[str, str, str]  # keys
-    # indices into each category pool (0..9)
+    # indices into each category pool (0..POOL_SIZE-1)
     pillow_i: int
     brush_i: int
     product_i: int
@@ -346,14 +348,14 @@ def iter_recipes_sequential() -> Iterator[Recipe]:
     """
     Deterministic full sweep (resume-friendly).
 
-    Space size = 10³ × 10 hairlines × 3! perms × N layouts
-               = 60_000 × N
+    Space size = POOL_SIZE^4 × 3! perms × N layouts
     """
     perms = list(itertools.permutations(("pillow", "brush", "product")))
-    for hair_i in range(10):
-        for pillow_i in range(10):
-            for brush_i in range(10):
-                for product_i in range(10):
+    n = POOL_SIZE
+    for hair_i in range(n):
+        for pillow_i in range(n):
+            for brush_i in range(n):
+                for product_i in range(n):
                     for perm in perms:
                         for layout in LAYOUTS:
                             yield Recipe(
@@ -369,14 +371,15 @@ def iter_recipes_sequential() -> Iterator[Recipe]:
 def iter_recipes_random(rng: random.Random) -> Iterator[Recipe]:
     """Endless stream of randomly sampled unique visual recipes."""
     perms = list(itertools.permutations(("pillow", "brush", "product")))
+    n = POOL_SIZE
     while True:
         yield Recipe(
             layout=rng.choice(LAYOUTS),
             slot_items=rng.choice(perms),
-            pillow_i=rng.randrange(10),
-            brush_i=rng.randrange(10),
-            product_i=rng.randrange(10),
-            hairline_i=rng.randrange(10),
+            pillow_i=rng.randrange(n),
+            brush_i=rng.randrange(n),
+            product_i=rng.randrange(n),
+            hairline_i=rng.randrange(n),
         )
 
 
@@ -502,7 +505,7 @@ def run(
                 if now - last_print >= 0.5:
                     print(
                         fmt_progress(produced, count, skipped, t0)
-                        + "  (scanning…)",
+                        + "  (scanning...)",
                         end="\r",
                         flush=True,
                     )
@@ -557,7 +560,7 @@ def run(
                 last_print = now
 
     except KeyboardInterrupt:
-        print("\n\nInterrupted — committing registry…")
+        print("\n\nInterrupted - committing registry...")
         conn.commit()
         print(fmt_progress(produced, count, skipped, t0))
         print(f"Saved {produced} this run. Re-run to continue.")
@@ -569,7 +572,7 @@ def run(
     print()
     print(fmt_progress(produced, count, skipped, t0))
     elapsed = time.perf_counter() - t0
-    print(f"Done. {produced} new collages in {elapsed:.1f}s → {out_root.resolve()}")
+    print(f"Done. {produced} new collages in {elapsed:.1f}s -> {out_root.resolve()}")
     return 0
 
 def main(argv: list[str] | None = None) -> int:
