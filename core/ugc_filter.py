@@ -37,10 +37,6 @@ UGC_ANCHORS: tuple[str, ...] = (
         "grainy night photo at home, handheld phone, harsh flash or dim lamp, "
         "authentic everyday moment"
     ),
-    (
-        "messy lived-in room, cluttered kitchen counter, dirty dishes in sink, "
-        "real apartment snapshot, imperfect everyday mess"
-    ),
 )
 
 STOCK_ANCHORS: tuple[str, ...] = (

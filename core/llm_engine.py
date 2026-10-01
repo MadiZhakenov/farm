@@ -947,7 +947,7 @@ def _gemini_key_hint() -> str:
 def _ensure_api_key() -> str:
     load_dotenv(ROOT / ".env")
     key = (os.environ.get("GEMINI_API_KEY") or "").strip()
-    if not key:
+    if not key or key.lower() in {"your_key_here", "your-key-here", "changeme"}:
         raise GeminiApiKeyMissing(_gemini_key_hint())
     return key
 
@@ -1620,7 +1620,8 @@ def _call_gemini_json_httpx(
             "temperature": temperature,
             "maxOutputTokens": GEMINI_MAX_OUTPUT_TOKENS,
             "responseMimeType": "application/json",
-            "responseSchema": CarouselSlidesSchema.model_json_schema(),
+            # responseJsonSchema понимает $defs/$ref из pydantic (responseSchema — нет → HTTP 400)
+            "responseJsonSchema": CarouselSlidesSchema.model_json_schema(),
         },
     }
     try:
@@ -1785,14 +1786,17 @@ class OllamaGenerator:
                 temperature=temperature,
                 timeout=self.timeout,
             )
-        except RuntimeError:
-            parsed = _call_gemini_json_httpx(
-                api_key=api_key,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                temperature=temperature,
-                timeout=self.timeout,
-            )
+        except RuntimeError as sdk_exc:
+            try:
+                parsed = _call_gemini_json_httpx(
+                    api_key=api_key,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    temperature=temperature,
+                    timeout=self.timeout,
+                )
+            except RuntimeError as http_exc:
+                raise RuntimeError(f"{sdk_exc} | REST fallback: {http_exc}") from http_exc
 
         character_dna = sanitize_character_dna(
             parsed.get("character_dna") if isinstance(parsed, dict) else None,

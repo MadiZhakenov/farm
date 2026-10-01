@@ -392,7 +392,7 @@ def _region_noise_and_luma(
     x1 = max(x0 + 1, min(x1, gray.width))
     y1 = max(y0 + 1, min(y1, gray.height))
     crop = gray.crop((x0, y0, x1, y1))
-    pixels = list(crop.getdata())
+    pixels = list((crop.get_flattened_data() if hasattr(crop, "get_flattened_data") else crop.getdata()))
     if len(pixels) < 4:
         return 9999.0, 128.0
 
@@ -404,7 +404,7 @@ def _region_noise_and_luma(
 
     # градиент: find_edges → средняя яркость краёв
     edges = crop.filter(ImageFilter.FIND_EDGES)
-    edge_px = list(edges.getdata())
+    edge_px = list((edges.get_flattened_data() if hasattr(edges, "get_flattened_data") else edges.getdata()))
     edge_mean = float(statistics.fmean(edge_px)) if edge_px else 0.0
 
     # соседние перепады по горизонтали (сэмпл)

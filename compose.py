@@ -304,6 +304,8 @@ def composite_chroma_supersample(
 
 def find_color_images(folder: Path) -> list[tuple[Path, str]]:
     found: dict[str, Path] = {}
+    if not folder.is_dir():  # свежий клон: «before after» в .gitignore
+        return []
     for f in folder.iterdir():
         if not f.is_file() or f.suffix.lower() not in SUPPORTED:
             continue

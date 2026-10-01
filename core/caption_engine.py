@@ -160,7 +160,7 @@ def _call_gemini_httpx(api_key: str, prompt: str) -> dict[str, Any]:
             "temperature": 0.65,
             "maxOutputTokens": MAX_OUTPUT_TOKENS,
             "responseMimeType": "application/json",
-            "responseSchema": CaptionSchema.model_json_schema(),
+            "responseJsonSchema": CaptionSchema.model_json_schema(),
         },
     }
     r = httpx.post(url, json=payload, timeout=TIMEOUT_SEC)

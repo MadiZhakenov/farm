@@ -1726,3 +1726,46 @@ class ReviewPanel(ttk.Frame):
             self.canvas.yview_moveto(y0 / total)
         elif y1 > bot:
             self.canvas.yview_moveto(max(0, (y1 - (bot - top)) / total))
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Отдельный запуск: python review_panel.py [out/run_XXX]."""
+    import sys
+
+    args = list(sys.argv[1:] if argv is None else argv)
+    root = tk.Tk()
+    root.title("Farm — быстрый отсмотр")
+    root.geometry("1400x900")
+    root.configure(bg=BG)
+
+    status = tk.StringVar(value="")
+    panel = ReviewPanel(root, on_status=status.set)
+    panel.pack(fill=tk.BOTH, expand=True)
+    tk.Label(root, textvariable=status, bg=PANEL, fg=MUTED, anchor="w").pack(fill=tk.X)
+    panel.set_active(True)
+
+    def _on_key(event: tk.Event) -> str | None:  # type: ignore[type-arg]
+        cls = event.widget.winfo_class() if event.widget else ""
+        if cls in ("Entry", "Text", "TEntry", "Spinbox"):
+            return None
+        return panel.handle_key(event)
+
+    root.bind_all("<KeyPress>", _on_key)
+
+    if args:
+        run_dir = Path(args[0])
+    else:
+        out = Path(__file__).resolve().parent / "out"
+        runs = sorted(out.glob("run_*"), key=lambda p: p.stat().st_mtime) if out.is_dir() else []
+        run_dir = runs[-1] if runs else None
+    if run_dir is not None and run_dir.is_dir():
+        panel.load_run(run_dir)
+    else:
+        status.set("Нет out/run_* — запусти пакет в фабрике или передай путь: python review_panel.py out/run_XXX")
+
+    root.mainloop()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

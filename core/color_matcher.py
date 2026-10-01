@@ -40,7 +40,7 @@ def get_color_profile(image: Image.Image) -> dict[str, Any]:
         (PROFILE_SIZE, PROFILE_SIZE),
         Image.Resampling.BILINEAR,
     )
-    pixels = small.getdata()
+    pixels = (small.get_flattened_data() if hasattr(small, "get_flattened_data") else small.getdata())
     n = PROFILE_SIZE * PROFILE_SIZE
 
     sum_l = 0.0
