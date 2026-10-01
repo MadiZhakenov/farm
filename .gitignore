@@ -28,6 +28,28 @@ data/
 forensic_tmp/
 .tmp/
 yandex_videos/
+assets_download_1/
+*.rar
+*.zip
+*.7z
+
+# Local UGC / scrape scratch (keep tracked text lists)
+downloads/audio_new/
+downloads/frames/
+downloads/raw_materials/
+downloads/raw_materials_cozy/
+downloads/*.mp3
+downloads/*.mp4
+downloads/*.mov
+downloads/*.bak
+downloads/*.txt.bak
+
+# Runtime usage logs / one-off local scripts & audits
+story_usage.json
+build_pack_collages_download_2.py
+build_unique10_collages.py
+carousel_system_audit.pdf
+*.pdf
 
 # Dependencies & caches
 node_modules/
