@@ -42,6 +42,9 @@ CarouselDoneCb = Callable[[int, int, Path], None]  # idx, total, folder
 
 CANDIDATES = 10
 MIN_KEEP = 3
+# Формат «короткая мысль» — 3 слайда, «польза» — до 10 (см. llm_engine)
+MIN_SLIDES = 3
+MAX_SLIDES = 10
 MAX_ALTS_SAVED = 6
 # Темы/карусели не своей категории пропускаются (фидбек: «10 не про еду»)
 CATEGORY_FILTER_ENABLED = True
@@ -258,6 +261,8 @@ def build_one_carousel(
     folder_name: str | None = None,
     used_pins_run: set[str] | None = None,
     avoid_character_dnas: list[dict[str, str]] | None = None,
+    batch_index: int = 0,
+    batch_memory: dict[str, list[str]] | None = None,
     used_index: UsedIndex | None = None,
     category: str | None = None,
 ) -> Path:
@@ -303,6 +308,8 @@ def build_one_carousel(
         product_name=product,
         variation_index=variation_index,
         avoid_character_dnas=avoid_character_dnas,
+        batch_index=batch_index,
+        batch_memory=batch_memory,
     )
     _timer("1. Генерация текста (Gemini)", t1)
 
@@ -314,10 +321,12 @@ def build_one_carousel(
     scenes = [
         str(s.get("visual_scene") or "").strip() for s in slides_raw if s.get("text")
     ]
-    if len(texts) < 6:
-        raise RuntimeError(f"Too few slides from LLM: {len(texts)} (need ≥6)")
+    if len(texts) < MIN_SLIDES:
+        raise RuntimeError(
+            f"Too few slides from LLM: {len(texts)} (need ≥{MIN_SLIDES})"
+        )
 
-    texts = texts[:9]
+    texts = texts[:MAX_SLIDES]
     queries = queries[: len(texts)]
     scenes = (scenes + [""] * len(texts))[: len(texts)]
 
@@ -522,6 +531,7 @@ def build_one_carousel(
         "category": category,
         "photo_roles": roles,
         "heavy_topic": heavy,
+        "format": result.get("format"),
     }
 
     status(f"[{index}] Render + Negative Space…")
@@ -683,6 +693,10 @@ def build_one_carousel(
             except Exception:
                 pass
         s.candidates.clear()
+    # Пачка: следующие карусели не повторяют хук / вступления / CTA / архетип
+    from core.llm_engine import remember_carousel
+
+    remember_carousel(batch_memory, result)
     del batch_slides, result, texts, queries
     hard_gc()
     _timer("ИТОГО на карусель", t_carousel)
@@ -757,6 +771,9 @@ def run_batch(
     # Run-level dedupe pin_id across all carousels in this batch
     used_pins_run: set[str] = set()
     used_character_dnas: list[dict[str, str]] = []
+    from core.llm_engine import new_batch_memory
+
+    batch_memory = new_batch_memory()
     harvester.reset_used()
 
     topic_list = [t.strip() for t in (topics or []) if t and str(t).strip()]
@@ -830,6 +847,8 @@ def run_batch(
                     folder_name=folder_name,
                     used_pins_run=used_pins_run,
                     avoid_character_dnas=list(used_character_dnas),
+                    batch_index=i - 1,
+                    batch_memory=batch_memory,
                     used_index=used_index,
                     category=category,
                 )
@@ -850,6 +869,8 @@ def run_batch(
                     folder_name=folder_name,
                     used_pins_run=used_pins_run,
                     avoid_character_dnas=list(used_character_dnas),
+                    batch_index=i - 1,
+                    batch_memory=batch_memory,
                     used_index=used_index,
                     category=category,
                 )
@@ -974,6 +995,8 @@ def run_batch(
                     folder_name=folder_name,
                     used_pins_run=retry_used,
                     avoid_character_dnas=list(used_character_dnas),
+                    batch_index=i - 1,
+                    batch_memory=batch_memory,
                     used_index=used_index,
                     category=category,
                 )

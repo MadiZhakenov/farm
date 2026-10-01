@@ -74,7 +74,7 @@ class FakeLLM:
         self.texts_by_topic = texts_by_topic
         self.calls = []
 
-    def generate_carousel(self, topic, product_name="", variation_index=0, avoid_character_dnas=None):
+    def generate_carousel(self, topic, product_name="", variation_index=0, avoid_character_dnas=None, **_kw):
         self.calls.append((topic, variation_index))
         texts = self.texts_by_topic.get(topic, FOOD_TEXTS)
         return {

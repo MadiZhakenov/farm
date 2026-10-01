@@ -22,6 +22,13 @@ DEFAULT_DNA = ROOT / "data" / "archetypes_dna.json"
 
 _DNA: dict[str, Any] | None = None
 _DNA_LOCK = threading.Lock()
+# Разброс похожести тема↔архетип всего ~0.1, поэтому прежний вес 0.3 у
+# save rate почти всегда выбирал «Study Books» (9/10 тем про еду, 2026-10-01)
+SAVE_RATE_WEIGHT = 0.05
+# Архетип, стоявший у REPEAT_LIMIT последних каруселей, уступает следующему,
+# если тот не дальше REPEAT_SIM_SLACK по похожести
+REPEAT_LIMIT = 2
+REPEAT_SIM_SLACK = 0.03
 
 
 def load_archetypes_dna(path: Path | None = None) -> dict[str, Any] | None:
@@ -52,9 +59,11 @@ def select_archetype(
     topic: str,
     *,
     dna: dict[str, Any] | None = None,
+    avoid: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """
-    Выбрать архетип: cosine(topic_embed, centroid) * 0.7 + avg_save_rate_norm * 0.3
+    Выбрать архетип по смыслу темы; save rate — только тай-брейк.
+    avoid: имена архетипов последних каруселей пачки (разнообразие).
     """
     dna = dna or load_archetypes_dna()
     if not dna:
@@ -77,8 +86,7 @@ def select_archetype(
     sr_min, sr_max = min(sr_vals), max(sr_vals)
     denom = max(sr_max - sr_min, 1e-9)
 
-    best: dict[str, Any] | None = None
-    best_score = -1e9
+    scored: list[tuple[float, float, dict[str, Any]]] = []
     for a in arches:
         cent = np.asarray(a.get("centroid") or [], dtype=np.float32)
         if cent.size == 0 or cent.shape[0] != q.shape[0]:
@@ -88,12 +96,23 @@ def select_archetype(
             cent = cent / cnorm
             sim = float(np.dot(q, cent))
         sr_n = (float(a.get("avg_save_rate") or 0) - sr_min) / denom
-        score = sim * 0.7 + sr_n * 0.3
-        if score > best_score:
-            best_score = score
-            best = dict(a)
-            best["match_score"] = round(score, 4)
-            best["match_similarity"] = round(sim, 4)
+        scored.append((sim * (1 - SAVE_RATE_WEIGHT) + sr_n * SAVE_RATE_WEIGHT, sim, a))
+    scored.sort(key=lambda t: t[0], reverse=True)
+
+    # Пачка: архетип, стоявший у последних каруселей, уступает близкому по смыслу
+    recent = [str(x) for x in (avoid or [])]
+    pick = scored[0]
+    if recent.count(str(pick[2].get("name"))) >= REPEAT_LIMIT:
+        for cand in scored[1:]:
+            if pick[1] - cand[1] > REPEAT_SIM_SLACK:
+                break
+            if recent.count(str(cand[2].get("name"))) < REPEAT_LIMIT:
+                pick = cand
+                break
+    score, sim, a = pick
+    best = dict(a)
+    best["match_score"] = round(score, 4)
+    best["match_similarity"] = round(sim, 4)
     return best
 
 

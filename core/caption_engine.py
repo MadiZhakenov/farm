@@ -40,21 +40,53 @@ def _has_cyrillic(text: str) -> bool:
     return bool(re.search(r"[А-Яа-яЁё]", text or ""))
 
 
+ESSENCE_MAX_CHARS = 180
+# Вопрос в подписи → комментарии; ротация по теме, чтобы пачка не повторялась
+_COMMENT_PROMPTS = (
+    "Which slide hit a little too close?",
+    "Be honest — which one is you?",
+    "What's your version of this?",
+    "Tell me I'm not the only one.",
+    "Which one are you working on right now?",
+    "What would you add to this?",
+)
+
+
+def _first_sentences(text: str, limit: int = ESSENCE_MAX_CHARS) -> str:
+    """Целые предложения до limit (раньше резало посреди слова: «…energy H»)."""
+    text = re.sub(r"\s+", " ", text or "").strip()
+    if len(text) <= limit:
+        return text
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    out = ""
+    for s in sentences:
+        if out and len(out) + 1 + len(s) > limit:
+            break
+        out = f"{out} {s}".strip()
+    if len(out) > limit:  # одно длинное предложение — по границе слова
+        out = text[:limit].rsplit(" ", 1)[0].rstrip(",;:—-") + "…"
+    return out
+
+
 def _heuristic_caption(
     slides: list[str],
     topic: str,
     product: str = "",
 ) -> str:
     hook = (slides[0] if slides else topic).strip()
-    body = " ".join(slides[1:-1]) if len(slides) > 2 else " ".join(slides[1:])
-    essence = body[:180].strip() or f"A short carousel on {topic.strip() or 'focus'}."
+    body_slides = slides[1:-1] if len(slides) > 2 else slides[1:]
+    body = " ".join(
+        s if s.rstrip().endswith((".", "!", "?")) else s.rstrip() + "." for s in body_slides
+    )
+    essence = _first_sentences(body) or f"A short carousel on {topic.strip() or 'focus'}."
+    # CTA карусели уже разный (Save this for… / Send this to…) — не штамп
+    cta = (slides[-1].strip() if len(slides) > 2 else "") or "Save this for later."
+    if not cta.endswith((".", "!", "?")):
+        cta += "."
+    seed = sum(ord(ch) for ch in topic)
+    cta = f"{cta} {_COMMENT_PROMPTS[seed % len(_COMMENT_PROMPTS)]}"
     if product:
-        cta = (
-            f"Save this for tomorrow morning — and grab {product.split(':')[0].strip()} "
-            f"(link in bio)."
-        )
-    else:
-        cta = "Save this for tomorrow morning. You'll need the reminder."
+        cta += f" ({product.split(':')[0].strip()} — link in bio)"
     # Хештеги по нише темы (раньше почти всегда был #productivity,
     # даже в каруселях про еду и тело — фидбек 2026-09-29)
     from core.niches import hashtags_for

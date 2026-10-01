@@ -31,7 +31,8 @@ from pydantic import BaseModel, Field, field_validator
 logger = logging.getLogger(__name__)
 
 DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
-GEMINI_MAX_OUTPUT_TOKENS = 1200
+# 10 слайдов × (текст 30 слов + visual_scene + query) + DNA не влезали в 1200
+GEMINI_MAX_OUTPUT_TOKENS = 2400
 GEMINI_API_BASE = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     f"{DEFAULT_GEMINI_MODEL}:generateContent"
@@ -770,9 +771,31 @@ _STUDY_DESK_MARKERS: tuple[str, ...] = (
     "desk", "journal", "library", "bookstore", "notebook", "academia", "gilmore",
 )
 
-# Динамическая длина карусели (sweet spot: 6)
-MIN_CAROUSEL_SLIDES = 6
-MAX_CAROUSEL_SLIDES = 9
+# Длина зависит от формата. reel.farm (8 249 постов, 2026-10-01): 6 слайдов —
+# худшая длина (14.5% постов ≥100k), 3 слайда — 26%, 9–12 — 22–27% и больше
+# сохранений. Поэтому «короткая мысль» 3 слайда либо «польза» 8–10.
+MIN_CAROUSEL_SLIDES = 3
+MAX_CAROUSEL_SLIDES = 10
+
+# Форматы ротируются по номеру карусели в пачке (тема с «Signs…» / «How to…»
+# выбирает формат сама). В лучших постах про еду — конкретная польза
+# (свапы, идеи, рецепты), а не исповедь; исповедь остаётся одним из форматов.
+CAROUSEL_FORMATS = (
+    "relief_list",
+    "confession_fix",
+    "signs",
+    "relief_list",
+    "short_truth",
+)
+FORMAT_SLIDES: dict[str, tuple[int, int]] = {
+    "relief_list": (8, 10),
+    "signs": (8, 10),
+    "confession_fix": (7, 9),
+    "short_truth": (3, 3),
+}
+GENERATE_ATTEMPTS = 2
+# Связки голоса — не больше одной на карусель (было в каждом слайде всех 10)
+VOICE_GLUE = ("turns out", "honestly", "apparently", "the truth is", "so basically")
 
 # Legacy 5-slot keys (fallback для старых ответов)
 SLOT_KEYS = ("hook", "point_1", "point_2", "point_3", "cta")
@@ -1226,7 +1249,7 @@ NOT a consultant, coach, therapist, or productivity guru on a stage.
 Output ONLY valid JSON. No markdown. No commentary.
 
 LANGUAGE: All fields MUST be fluent conversational American English. Zero Russian.
-Use natural glue where it fits: "turns out", "honestly", "apparently", "the truth is", "so basically".
+Glue words ("turns out", "honestly", "the truth is"…) are fine, but at most ONE per carousel.
 No corporate speak. No lecture tone. No textbook advice voice.
 
 VOICE = Relatable Confession & Self-Awareness:
@@ -1240,7 +1263,7 @@ VOICE = Relatable Confession & Self-Awareness:
 Use precedents for rhythm/structure ONLY. Rewrite into the confession voice above —
 do NOT copy robotic coach phrasing even if an example uses it.
 
-FIXED STRUCTURE — dynamic JSON (character passport + slides 6–9):
+FIXED STRUCTURE — dynamic JSON (character passport + slides 3–10, count per FORMAT):
 {{
   "character_dna": {{
     "gender": "female",
@@ -1287,42 +1310,24 @@ FIXED STRUCTURE — dynamic JSON (character passport + slides 6–9):
   clashes with DNA (enforced by attr-lock, not by stuffing hair into the query).
 
 LENGTH RULES:
-- Slide 1 MUST be role="hook". Final slide MUST be role="cta".
-- Middle slides MUST be role="body" (punchy insights, not protocols).
-- If the topic states an explicit number (e.g. "7 habits", "5 rules", "6 steps"):
-  produce exactly 1 hook + exactly N body slides + 1 CTA
-  (total = N+2, clamped to 6–9).
-- If the topic has NO number: choose 6–8 total slides
-  (hook + 4–6 body + cta). Prefer 6. Never exceed 9. Never go below 6.
+- Slide 1 MUST be role="hook". Final slide MUST be role="cta". Middle slides role="body".
+- Slide count, hook shape and body shape come from the FORMAT block in the user
+  message (3 slides for a short truth, 8–10 for useful lists). Follow it exactly.
+- If the topic states an explicit number (e.g. "7 habits"): exactly N body slides.
 
-=== SLIDE STRUCTURE: CONFESSION → PUNCHLINE → TRUTH ===
+=== SLIDE STRUCTURE (details per FORMAT) ===
 
-HOOK (slide 1) — personal observation or absurd self-truth about THIS topic:
-Shape: a lived moment, a spiral, or a shameful little math problem — not a named system.
-Good shapes:
-- "I avoided one simple task for 3 weeks. It took me 18 minutes to finish."
-- "My boss texted 'can we talk?' and I spent 6 hours preparing to get fired."
-- "I realized half my workload was stuff I volunteered for just so people would like me."
-- "You don't hate Mondays. You hate plans made for a fictional version of yourself."
-Rotate styles (pick ONE):
-1) Personal Confession — specific time/cost/action you (or "you") wasted (~35%)
-2) Spiral Moment — an overreaction to a tiny trigger (~30%)
-3) Self-Awareness Punch — calling out the fake better self (~25%)
-4) Quiet Shame → Honesty — soft setup, sharp ending (~10%)
+HOOK (slide 1) — specific to THIS topic, readable in 2 seconds.
+Lived moments work, so do concrete promises of help. Invent the wording fresh for
+THIS topic — never reuse phrasing from instructions or examples.
 FORBIDDEN hook styles: "The [Name] protocol/rule/checklist", "Audit your…",
-"N ways/habits/steps/rules to…", "Nobody tells you…", "A neuroscientist taught me…",
-"Micro-habits you should steal…", screenshot-checklist default stamps.
+"Nobody tells you…", invented experts ("A neuroscientist taught me…",
+"my therapist said…"), "Micro-habits you should steal…", question hooks.
 
-BODY (slides 2–4+) — short forehead-punch insights, NO fancy terms:
-Aim for 8–18 words. One or two complete sentences. End with a period.
-Good shapes:
-- "Perfectionism is just procrastination wearing a nice outfit."
-- "You're preparing to work instead of actually working."
-- "Would you talk to a friend the way you talk to yourself when you fail? No. So stop."
-- "You don't need a better planner. You need permission to leave things unfinished."
+BODY — human voice, real nouns (foods, times, places, exact words to say).
 Rules:
-- Insight > instruction. Permission > protocol. Observation > lecture.
-- Prefer "honestly / turns out / the truth is / so basically" over imperative coach verbs.
+- Useful beats clever: every list item must be something the reader can do or spot.
+- Permission > protocol. Observation > lecture. Warm, never preachy.
 - FORBIDDEN openers & jargon: Audit, Define, Protocol, Triage, Optimize, Sensory reset,
   cognitive performance, checklist-as-identity.
 - TAB ADVICE: "Close browser tabs" ONLY if the topic is literally about tabs / context switching.
@@ -1422,16 +1427,173 @@ PRODUCT RULE:
 
 
 
+_NO_FAKE_AUTHORITY = (
+    "Never claim a therapist / doctor / dietitian / study said it — no invented "
+    "credentials or statistics."
+)
+FORMAT_SPECS: dict[str, str] = {
+    "relief_list": (
+        "FORMAT relief_list (8–10 slides: hook + 6–8 body + cta) — the reader must be "
+        "able to USE this tonight.\n"
+        "HOOK: promise a concrete fix for THIS topic's pain. Pick ONE shape: 'How to …', "
+        "'N [swaps / snacks / scripts / things] that …', 'The [moment] fix: …', "
+        "'What to eat / do / say when …'. End with a short honest qualifier in "
+        "parentheses that you invent for THIS topic (a constraint, a time, who it is "
+        "for) — never a stock phrase. Max 14 words INCLUDING the qualifier (hits in the data average 8). Do NOT start with 'I'. No question marks. "
+        + _NO_FAKE_AUTHORITY
+        + "\nBODY: each slide = ONE concrete item written as 'Short title: 1–2 sentences "
+        "on what to do and why it works'. 12–25 words. Second person (you). Name real "
+        "foods, times, places, words to say. Warm and human — no lecture, no jargon."
+    ),
+    "signs": (
+        "FORMAT signs (8–10 slides: hook + 6–8 body + cta) — recognition the reader "
+        "screenshots.\n"
+        "HOOK: 'N signs your [X] is really [Y]' or '[X] vs [Y]: how to tell in the "
+        "moment' — specific to THIS topic, optional short qualifier in parentheses. Max 14 words. "
+        "Do NOT start with 'I'. No question marks. "
+        + _NO_FAKE_AUTHORITY
+        + "\nBODY: each slide = ONE recognizable sign or difference as 'Short title: what "
+        "it looks like in real life, 1–2 sentences'. 12–25 words, second person. The "
+        "LAST body slide = what to do instead, concrete."
+    ),
+    "confession_fix": (
+        "FORMAT confession_fix (7–9 slides: hook + 5–7 body + cta) — confession that "
+        "pays off with real help.\n"
+        "HOOK: a specific lived moment or spiral about THIS topic, max 16 words. Do NOT open with "
+        "'I spent'; vary the first words (a time, an object, a quote, 'You…').\n"
+        "BODY: slides 2–3 = the honest truth behind it (8–20 words each). Slides 4+ = "
+        "what actually helps, each 'Short title: concrete action in 1–2 sentences' "
+        "(12–25 words) with real foods / times / words to say."
+    ),
+    "short_truth": (
+        "FORMAT short_truth (exactly 3 slides: hook + 1 body + cta) — one sharp idea, "
+        "fast to read.\n"
+        "HOOK: one bold relatable sentence about THIS topic, max 14 words, not starting "
+        "with 'I spent'. No question marks.\n"
+        "BODY: the single truth / reframe that flips it, 20–35 words, ends on a concrete "
+        "thing to try."
+    ),
+}
+
+
+def pick_carousel_format(topic: str, batch_index: int = 0) -> str:
+    """Формат по формулировке темы, иначе ротация по номеру в пачке."""
+    low = (topic or "").lower().strip()
+    if re.match(r"^(\d+\s+)?signs\b", low) or re.search(
+        r"\bthe difference between\b|\bvs\.?\b", low
+    ):
+        return "signs"
+    if re.match(r"^how (to|i)\b", low):
+        return "relief_list"
+    return CAROUSEL_FORMATS[int(batch_index) % len(CAROUSEL_FORMATS)]
+
+
+# Мотивы, которыми Gemini закрывает любую тему про еду (5/10 каруселей
+# 2026-10-01 — «ты голоден не по еде, а по дофамину/контролю»)
+_BATCH_MOTIFS = {
+    "dopamine": r"\bdopamine\b",
+    "hungry for control / not for food": r"\b(not|isn't|aren't|wasn't) (actually )?hungry\b|\bhungry for (a |some )?(control|comfort|dopamine)",
+    "willpower": r"\bwillpower\b",
+    "spiral": r"\bspiral",
+    "moral failure / earn your food": r"\bmoral\b|\bearn (your|my|it)\b",
+}
+
+
+def new_batch_memory() -> dict[str, list[str]]:
+    return {
+        "hooks": [], "hook_starts": [], "qualifiers": [], "openers": [],
+        "ctas": [], "motifs": [], "archetypes": [], "formats": [],
+    }
+
+
+def _ngrams(text: str, n: int = 3) -> set[str]:
+    w = re.sub(r"[^\w\s']", " ", (text or "").lower()).split()
+    return {" ".join(w[i : i + n]) for i in range(len(w) - n + 1)}
+
+
+def _opener(text: str, n: int = 2) -> str:
+    words = re.sub(r"[^\w\s']", " ", (text or "").lower()).split()
+    return " ".join(words[:n])
+
+
+def remember_carousel(memory: dict[str, list[str]] | None, result: dict[str, Any]) -> None:
+    """Запомнить хук / вступления / CTA / мотивы карусели для следующих в пачке."""
+    if memory is None or not isinstance(result, dict):
+        return
+    slides = [str(s.get("text") or "") for s in result.get("slides") or []]
+    if not slides:
+        return
+    memory["hooks"].append(" ".join(slides[0].split()[:6]))
+    memory["hook_starts"].append(_opener(slides[0], 3))
+    memory["qualifiers"] += re.findall(r"\(([^)]{3,60})\)", slides[0])
+    memory["openers"] += [_opener(t) for t in slides[1:-1] if _opener(t)]
+    memory["ctas"].append(slides[-1])
+    blob = " ".join(slides).lower()
+    memory["motifs"] += [m for m, pat in _BATCH_MOTIFS.items() if re.search(pat, blob)]
+    if result.get("dna_archetype"):
+        memory["archetypes"].append(str(result["dna_archetype"]))
+    if result.get("format"):
+        memory["formats"].append(str(result["format"]))
+
+
+def batch_variety_lines(memory: dict[str, list[str]] | None) -> list[str]:
+    if not memory or not memory.get("hooks"):
+        return []
+    from collections import Counter
+
+    lines = ["BATCH VARIETY — earlier carousels in THIS run already used (do NOT repeat):"]
+    lines.append("- hook openings: " + "; ".join(f"'{h}…'" for h in memory["hooks"][-6:]))
+    common = [o for o, n in Counter(memory["openers"]).most_common(8) if n >= 2]
+    if common:
+        lines.append("- slide openers (avoid): " + ", ".join(f"'{o}'" for o in common))
+    starts = [h for h, n in Counter(memory["hook_starts"]).most_common() if n >= 2]
+    if starts:
+        lines.append(
+            "- hook starts used 2+ times (start differently): "
+            + ", ".join(f"'{h}…'" for h in starts)
+        )
+    if memory["qualifiers"]:
+        lines.append(
+            "- parenthetical qualifiers (write a NEW one): "
+            + "; ".join(f"'({q})'" for q in memory["qualifiers"][-6:])
+        )
+        # Gemini сам изобретает шаблон («(the one where you…)» ×5) — бан по началу
+        q_starts = Counter(_opener(q, 3) for q in memory["qualifiers"])
+        worn_q = [q for q, n in q_starts.most_common() if n >= 2]
+        if worn_q:
+            lines.append(
+                "- qualifier patterns worn out (no parentheses starting like this): "
+                + ", ".join(f"'({q}…)'" for q in worn_q)
+            )
+    lines.append("- CTAs: " + "; ".join(f"'{c[:60]}'" for c in memory["ctas"][-4:]))
+    cta_grams = Counter(g for c in memory["ctas"] for g in _ngrams(c) if not g.startswith(("save this", "send this", "this for", "this to")))
+    worn = [g for g, n in cta_grams.most_common(6) if n >= 2]
+    if worn:
+        lines.append("- CTA phrases already worn out: " + ", ".join(f"'{g}'" for g in worn))
+    tired = [m for m, n in Counter(memory["motifs"]).most_common() if n >= 2]
+    if tired:
+        lines.append(
+            "- overused angles (find a different one): " + ", ".join(tired)
+        )
+    return lines
+
+
 def build_user_prompt(
     topic: str,
     product_name: str = "",
     variation_index: int = 0,
     archetype_hint: str = "",
     avoid_character_looks: list[str] | None = None,
+    *,
+    carousel_format: str = "confession_fix",
+    batch_index: int = 0,
+    batch_memory: dict[str, list[str]] | None = None,
 ) -> str:
     topic = topic.strip()
     product = product_name.strip()
-    style = HOOK_ARCHETYPES[variation_index % len(HOOK_ARCHETYPES)]
+    fmt = carousel_format if carousel_format in FORMAT_SPECS else "confession_fix"
+    # Пачка разных тем шла с variation_index=0 → у всех стиль A («I spent…»)
+    style = HOOK_ARCHETYPES[(variation_index + batch_index) % len(HOOK_ARCHETYPES)]
     style_hint = {
         "A": (
             "HOOK STYLE A (Personal Confession) — a specific thing YOU avoided / overdid / "
@@ -1451,33 +1613,40 @@ def build_user_prompt(
         ),
     }[style]
 
+    lo, hi = FORMAT_SLIDES[fmt]
     implied_bodies = _topic_implied_body_count(topic)
-    if implied_bodies is not None:
-        total = max(MIN_CAROUSEL_SLIDES, min(MAX_CAROUSEL_SLIDES, implied_bodies + 2))
+    if implied_bodies is not None and fmt != "short_truth":
+        total = max(lo, min(MAX_CAROUSEL_SLIDES, implied_bodies + 2))
         length_hint = (
-            f"LENGTH: topic implies {implied_bodies} tips → "
+            f"LENGTH: topic implies {implied_bodies} items → "
             f"exactly 1 hook + {implied_bodies} body + 1 CTA "
             f"(total {implied_bodies + 2} slides, clamp to {total} if needed)."
         )
     else:
-        length_hint = (
-            "LENGTH: no explicit number in topic — choose 6–8 total slides "
-            "(hook + 4–6 body + cta) for depth. Prefer 6. Max 9."
-        )
+        length_hint = f"LENGTH: {lo}–{hi} slides total, as the FORMAT says."
 
     lines = [
         f"TOPIC: {topic}",
         f"VARIATION: #{variation_index + 1}",
-        style_hint,
-        "VOICE: tired honest human — confession → punchline → truth. Not a robot consultant.",
-        "TOPIC RELEVANCE: synthesize from this topic's nouns. Never reuse fixed catchphrases.",
+        FORMAT_SPECS[fmt],
+        style_hint if fmt == "confession_fix" else "",
+        "VOICE: tired honest human, never a robot consultant. Use AT MOST ONE of "
+        + " / ".join(f"'{g}'" for g in VOICE_GLUE)
+        + " in the whole carousel.",
+        "TOPIC RELEVANCE: synthesize from this topic's nouns. Never reuse fixed catchphrases. "
+        "Deliver exactly what the hook promises (a 'How to' hook needs real steps).",
         length_hint,
         "",
-        "Return JSON with a slides[] array now (6–9 items).",
+        f"Return JSON with a slides[] array now ({lo}–{hi} items).",
         'First slide role="hook", middle role="body", last role="cta".',
-        "Hook: personal/absurd self-truth. Never 'The X protocol/rule/checklist'. Never Audit/Define.",
-        "Body: short forehead-punch insights (8–18 words). Complete sentences with periods.",
-        "Body language: turns out / honestly / apparently / the truth is / so basically — not coach verbs.",
+        "Never 'The X protocol/rule/checklist'. Never Audit/Define/Optimize.",
+        "Complete sentences with periods.",
+        # Чередование грамматики CTA по пачке (3 из 10 «…the next time you feel…»)
+        (
+            "CTA for THIS carousel: 'Save this for [a specific moment]'."
+            if batch_index % 2 == 0
+            else "CTA for THIS carousel: 'Send this to [a specific person]'."
+        ),
         "CHARACTER LOCK: coarse traits only (hair color, skin, age band, build). "
         "Same face / same outfit NOT required. Slide 1 may show narrator; "
         "slides 2+ prefer POV/hands/objects — no clashing hair color on any person.",
@@ -1535,7 +1704,8 @@ def build_user_prompt(
             "DNA DIVERSITY: prefer non-blonde looks unless the topic itself says blonde/blond."
         )
 
-    return "\n".join(lines)
+    lines += batch_variety_lines(batch_memory)
+    return "\n".join(line for line in lines if line)
 
 
 
@@ -1732,7 +1902,11 @@ class OllamaGenerator:
         *,
         run_critic: bool = False,
         avoid_character_dnas: list[dict[str, str]] | None = None,
+        batch_index: int = 0,
+        batch_memory: dict[str, list[str]] | None = None,
     ) -> dict[str, Any]:
+        """batch_index / batch_memory — номер в пачке и что уже было в ней
+        (формат, архетип, хуки, вступления, CTA) для разнообразия."""
         topic = (topic or "").strip()
         if not topic:
             raise ValueError("Тема карусели пустая")
@@ -1766,7 +1940,9 @@ class OllamaGenerator:
             if bit:
                 avoid_looks.append(bit)
 
-        archetype = select_archetype(topic)
+        carousel_format = pick_carousel_format(topic, batch_index + variation_index)
+        recent_arch = (batch_memory or {}).get("archetypes", [])[-2:]
+        archetype = select_archetype(topic, avoid=recent_arch)
         arch_hint = archetype_prompt_hint(archetype)
         user_prompt = build_user_prompt(
             topic,
@@ -1774,42 +1950,56 @@ class OllamaGenerator:
             variation_index=variation_index,
             archetype_hint=arch_hint,
             avoid_character_looks=avoid_looks,
+            carousel_format=carousel_format,
+            batch_index=batch_index,
+            batch_memory=batch_memory,
         )
         system_prompt = build_system_prompt(examples)
 
-        try:
-            parsed = _call_gemini_json(
-                api_key=api_key,
-                model=self.model,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                temperature=temperature,
-                timeout=self.timeout,
-            )
-        except RuntimeError as sdk_exc:
+        # Изредка ответ без slides[] / слишком короткий — один повтор вместо
+        # провала всей карусели
+        for attempt in range(GENERATE_ATTEMPTS):
             try:
-                parsed = _call_gemini_json_httpx(
+                parsed = _call_gemini_json(
                     api_key=api_key,
+                    model=self.model,
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
                     temperature=temperature,
                     timeout=self.timeout,
                 )
-            except RuntimeError as http_exc:
-                raise RuntimeError(f"{sdk_exc} | REST fallback: {http_exc}") from http_exc
+            except RuntimeError as sdk_exc:
+                try:
+                    parsed = _call_gemini_json_httpx(
+                        api_key=api_key,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        temperature=temperature,
+                        timeout=self.timeout,
+                    )
+                except RuntimeError as http_exc:
+                    raise RuntimeError(
+                        f"{sdk_exc} | REST fallback: {http_exc}"
+                    ) from http_exc
 
-        character_dna = sanitize_character_dna(
-            parsed.get("character_dna") if isinstance(parsed, dict) else None,
-            topic=topic,
-            variation_index=variation_index,
-            avoid_families=avoid_families,
-        )
-        slides = sanitize_and_slots_to_slides(
-            parsed,
-            product=product,
-            topic=topic,
-            character_dna=character_dna,
-        )
+            character_dna = sanitize_character_dna(
+                parsed.get("character_dna") if isinstance(parsed, dict) else None,
+                topic=topic,
+                variation_index=variation_index,
+                avoid_families=avoid_families,
+            )
+            try:
+                slides = sanitize_and_slots_to_slides(
+                    parsed,
+                    product=product,
+                    topic=topic,
+                    character_dna=character_dna,
+                )
+                break
+            except RuntimeError as exc:
+                if attempt + 1 >= GENERATE_ATTEMPTS:
+                    raise
+                logger.warning("Gemini reply unusable (%s) — retry", exc)
         slides = diversify_cta(slides, seed=variation_index)
 
         slide_dicts = [
@@ -1865,7 +2055,10 @@ class OllamaGenerator:
             "few_shot_count": len(examples),
             "few_shot_source": self._rag_source,
             "few_shot_hooks": [e.hook for e in examples],
-            "hook_archetype": HOOK_ARCHETYPES[variation_index % len(HOOK_ARCHETYPES)],
+            "hook_archetype": HOOK_ARCHETYPES[
+                (variation_index + batch_index) % len(HOOK_ARCHETYPES)
+            ],
+            "format": carousel_format,
             "dna_archetype": (archetype or {}).get("name"),
             "character_dna": character_dna,
             "quality": critic_meta,
@@ -2254,29 +2447,7 @@ def _scrub_query(
 
 
 
-_STAMP_BODY_VERBS = (
-    "Audit",
-    "Define",
-    "Replace",
-    "Optimize",
-    "Triage",
-    "Protocol",
-    "Implement",
-    "Calibrate",
-    "Leverage",
-)
 
-# Человеческие переписывалки вместо Cut/Block/Kill-императивов
-_HUMAN_BODY_OPENERS = (
-    "Honestly,",
-    "Turns out",
-    "The truth is,",
-    "So basically,",
-    "Apparently,",
-    "You're",
-    "I keep",
-    "Most days,",
-)
 
 # Face/stock + dead-object bans (legacy name kept for imports)
 _BANNED_DECOR_QUERY_PHRASES = (
@@ -2349,45 +2520,36 @@ def _scrub_robot_lexicon(text: str) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
+# Корпоративный глагол в начале слайда → простой человеческий синоним.
+# Раньше подставлялась связка («Honestly,»), что ломало «Заголовок: …» в
+# форматах-списках («Label the feeling:» → «Honestly, the feeling:»).
+# Replace / Label — обычные глаголы для списков, их не трогаем.
+_STAMP_VERB_PLAIN = {
+    "audit": "Look at",
+    "define": "Pick",
+    "optimize": "Improve",
+    "triage": "Sort",
+    "protocol": "Habit",
+    "implement": "Start",
+    "calibrate": "Adjust",
+    "leverage": "Use",
+}
+
+
 def _dedupe_body_verb_openers_list(body_texts: list[str]) -> list[str]:
-    """Убрать робот-открывашки (Audit/Define/…) и не штамповать одни human openers."""
-    stamp_lower = {verb.lower() for verb in _STAMP_BODY_VERBS}
-    used_openers: set[str] = set()
-    rewrite_idx = 0
+    """Убрать робот-открывашки (Audit/Define/…), не ломая структуру слайда."""
     out = list(body_texts)
-
-    def _next_human_opener() -> str:
-        nonlocal rewrite_idx
-        while True:
-            candidate = _HUMAN_BODY_OPENERS[rewrite_idx % len(_HUMAN_BODY_OPENERS)]
-            rewrite_idx += 1
-            key = candidate.lower().rstrip(",")
-            if key not in used_openers:
-                return candidate
-
     for i, text in enumerate(out):
         cleaned = _scrub_robot_lexicon(text)
         match = re.match(r"^([A-Za-z]+)\b", cleaned)
-        if not match:
-            out[i] = cleaned
-            continue
-        verb_low = match.group(1).lower()
-        needs_replace = verb_low in stamp_lower or verb_low == "label"
-        if needs_replace:
-            new_opener = _next_human_opener()
-            rest = re.sub(r"^[A-Za-z]+\b\s*", "", cleaned, count=1).strip()
-            if rest:
-                rest = rest[0].lower() + rest[1:]
-                out[i] = f"{new_opener} {rest}"
-            else:
-                out[i] = new_opener
-            used_openers.add(new_opener.lower().rstrip(","))
+        plain = _STAMP_VERB_PLAIN.get(match.group(1).lower()) if match else None
+        if plain:
+            cleaned = plain + cleaned[match.end():]
             logger.warning(
-                "Rewrote robot body opener[%d]: %r → %r", i, text, out[i]
+                "Rewrote robot body opener[%d]: %r → %r", i, text, cleaned
             )
-        else:
-            out[i] = cleaned
-            used_openers.add(verb_low)
+        # scrub может вернуть строчное начало («Audit your» → «look at your»)
+        out[i] = cleaned[:1].upper() + cleaned[1:] if cleaned else cleaned
     return out
 
 
@@ -3232,7 +3394,8 @@ def _raw_slides_from_payload(data: dict[str, Any]) -> list[dict[str, str]] | Non
                         "search_query": query,
                     }
                 )
-        if len(out) >= 4:
+        # формат short_truth — ровно 3 слайда (hook + body + cta)
+        if len(out) >= MIN_CAROUSEL_SLIDES:
             return out
 
     # legacy fixed slots
