@@ -45,6 +45,9 @@ MIN_KEEP = 3
 MAX_ALTS_SAVED = 6
 # Темы/карусели не своей категории пропускаются (фидбек: «10 не про еду»)
 CATEGORY_FILTER_ENABLED = True
+# Preflight-поиск Pinterest не повторять, если сеть отдавала пины недавно
+PREFLIGHT_SKIP_SEC = 300.0
+
 
 
 class OffCategoryError(RuntimeError):
@@ -219,6 +222,29 @@ def apply_color_harmony(slides: list[BatchSlide]) -> None:
             )
 
 
+def _pinterest_preflight(harvester: PinterestHarvester) -> None:
+    try:
+        harvester.warm_session(force=False)
+        probe = harvester.search("coffee table", finalize=False)
+        if not probe:
+            probe = harvester.search("keys desk", finalize=False)
+        if not probe:
+            raise RuntimeError(
+                "Pinterest недоступен (сеть=0 на probe «coffee table»). "
+                "Проверь VPN/firewall/прокси — SSL handshake к pinterest.com "
+                "сейчас не проходит. Gemini-текст уже сгенерирован, но фото "
+                "скачать нельзя."
+            )
+        print(f"[Pinterest] preflight OK · {len(probe)} pins на probe")
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(
+            f"Pinterest preflight fail: {exc}. "
+            "Сеть до pinterest.com недоступна — фото не скачать."
+        ) from exc
+
+
 def build_one_carousel(
     *,
     llm: OllamaGenerator,
@@ -259,6 +285,16 @@ def build_one_carousel(
         )
     except Exception as exc:
         print(f"[WARNING] SigLIP warm fail: {exc}")
+    # moondream в VRAM в фоне, пока идут Gemini + Pinterest (cold start ~28 с)
+    try:
+        from core.harvester import BORDERLINE_JUDGE, BORDERLINE_VISION_ENABLED
+
+        if BORDERLINE_VISION_ENABLED and BORDERLINE_JUDGE == "moondream":
+            from core.local_gate import warm_vision_model
+
+            warm_vision_model()
+    except Exception as exc:
+        print(f"[WARNING] vision warm fail: {exc}")
 
     status(f"[{index}] Gemini · unique angle #{variation_index + 1}…")
     t1 = time.perf_counter()
@@ -344,27 +380,16 @@ def build_one_carousel(
         print("[rules] тяжёлая тема: в середине можно темнее, финал спокойный")
 
     status(f"[{index}] Pinterest parallel · {len(specs)} слайдов…")
-    # Быстрый preflight: если Pinterest недоступен — сразу понятная ошибка
-    try:
-        harvester.warm_session(force=False)
-        probe = harvester.search("coffee table", finalize=False)
-        if not probe:
-            probe = harvester.search("keys desk", finalize=False)
-        if not probe:
-            raise RuntimeError(
-                "Pinterest недоступен (сеть=0 на probe «coffee table»). "
-                "Проверь VPN/firewall/прокси — SSL handshake к pinterest.com "
-                "сейчас не проходит. Gemini-текст уже сгенерирован, но фото "
-                "скачать нельзя."
-            )
-        print(f"[Pinterest] preflight OK · {len(probe)} pins на probe")
-    except RuntimeError:
-        raise
-    except Exception as exc:
-        raise RuntimeError(
-            f"Pinterest preflight fail: {exc}. "
-            "Сеть до pinterest.com недоступна — фото не скачать."
-        ) from exc
+    # Быстрый preflight: если Pinterest недоступен — сразу понятная ошибка.
+    # Сеть отвечала пинами недавно (прошлая карусель) — лишний поиск не нужен.
+    last_ok = float(getattr(harvester, "last_search_ok_ts", 0.0) or 0.0)
+    if time.monotonic() - last_ok < PREFLIGHT_SKIP_SEC:
+        print(
+            f"[Pinterest] preflight skip · сеть отвечала < "
+            f"{PREFLIGHT_SKIP_SEC:.0f} с назад"
+        )
+    else:
+        _pinterest_preflight(harvester)
 
     harvester.reset_timing()
     harvested = harvester.harvest_slides_parallel(

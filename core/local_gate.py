@@ -22,6 +22,8 @@ import json
 import logging
 import os
 import re
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +36,11 @@ if OLLAMA_HOST and "://" not in OLLAMA_HOST:
     OLLAMA_HOST = "http://" + OLLAMA_HOST
 TEXT_MODEL = (os.getenv("CRITIC_OLLAMA_MODEL") or "qwen2.5:7b").strip()
 VISION_MODEL = (os.getenv("LOCAL_GATE_VISION_MODEL") or "moondream").strip()
+# Модель в VRAM между каруселями (дефолт Ollama 5 мин → холодный старт ~28 с)
+VISION_KEEP_ALIVE = "30m"
+# /api/tags дважды на каждый vision-кадр → один раз в минуту
+_READY_TTL_SEC = 60.0
+_ready_cache: dict[str, tuple[float, bool]] = {}
 
 _DNA_ARCH_RE = re.compile(
     r"(study books|clean girl|that girl|soft life|dark academia)",
@@ -76,6 +83,35 @@ def _model_ready(want: str) -> bool:
     return False
 
 
+def vision_ready(model: str = VISION_MODEL) -> bool:
+    """ollama_up() and _model_ready() с кэшем на _READY_TTL_SEC."""
+    now = time.monotonic()
+    hit = _ready_cache.get(model)
+    if hit and now - hit[0] < _READY_TTL_SEC:
+        return hit[1]
+    ok = ollama_up() and _model_ready(model)
+    _ready_cache[model] = (now, ok)
+    return ok
+
+
+def warm_vision_model(model: str = VISION_MODEL) -> None:
+    """Фоновая загрузка vision-модели в VRAM, пока идут Gemini / Pinterest."""
+
+    def _load() -> None:
+        try:
+            if not vision_ready(model):
+                return
+            httpx.post(
+                f"{OLLAMA_HOST}/api/generate",
+                json={"model": model, "keep_alive": VISION_KEEP_ALIVE},
+                timeout=120.0,
+            )
+        except Exception as exc:
+            logger.debug("vision warm fail: %s", exc)
+
+    threading.Thread(target=_load, name="vision-warm", daemon=True).start()
+
+
 def _extract_json(raw: str) -> dict[str, Any]:
     text = (raw or "").strip()
     if text.startswith("```"):
@@ -96,6 +132,7 @@ def ollama_generate(
     num_predict: int = 400,
     as_json: bool = True,
     timeout: float = 120.0,
+    keep_alive: str | None = None,
 ) -> dict[str, Any] | str:
     payload: dict[str, Any] = {
         "model": model or TEXT_MODEL,
@@ -103,6 +140,8 @@ def ollama_generate(
         "stream": False,
         "options": {"temperature": temperature, "num_predict": num_predict},
     }
+    if keep_alive:
+        payload["keep_alive"] = keep_alive
     if as_json:
         payload["format"] = "json"
     if images_b64:
@@ -475,7 +514,7 @@ def vision_borderline_is_live(
         "or\n"
         "DROP 2 reason"
     )
-    if not ollama_up() or not _model_ready(VISION_MODEL):
+    if not vision_ready(VISION_MODEL):
         return {
             "ok": False,
             "keep": False,
@@ -492,6 +531,7 @@ def vision_borderline_is_live(
             num_predict=40,
             as_json=False,
             timeout=60.0,
+            keep_alive=VISION_KEEP_ALIVE,
         )
         assert isinstance(raw, str)
         s = (raw or "").strip()

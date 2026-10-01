@@ -9,6 +9,7 @@ openai/clip-vit-base-patch32 (512). GPU fp16 если есть CUDA, иначе 
 
 from __future__ import annotations
 
+import hashlib
 import threading
 from collections import OrderedDict
 from pathlib import Path
@@ -32,6 +33,32 @@ _EMBEDDER: TasteEmbedder | None = None
 _IMG_VEC_CACHE: "OrderedDict[str, np.ndarray]" | None = None
 _CACHE_HITS = 0
 _CACHE_MISSES = 0
+# Фиксированные промпты (gender/face/hair/UGC-якоря) зовутся на каждый кадр —
+# один text forward на строку за процесс вместо сотен.
+_TEXT_VEC_CACHE: "OrderedDict[tuple[str, str], np.ndarray]" = OrderedDict()
+TEXT_CACHE_MAX = 2048
+# Кадры без pin_id (gender/face/attr-гейты) — ключ в памяти, не на диск
+_MEM_KEY_PREFIX = "mem:"
+_IMG_KEY_ATTR = "_farm_vec_key"
+
+
+def _rgb(im: Image.Image) -> Image.Image:
+    """convert('RGB') без копии, если кадр уже RGB (копия теряет кэш-ключ)."""
+    return im if im.mode == "RGB" else im.convert("RGB")
+
+
+def _implicit_key(im: Image.Image) -> str:
+    """pin_id, которым кадр уже встречался, иначе хэш пикселей (только память)."""
+    key = getattr(im, _IMG_KEY_ATTR, None)
+    if key:
+        return str(key)
+    digest = hashlib.blake2b(_rgb(im).tobytes(), digest_size=16).hexdigest()
+    key = f"{_MEM_KEY_PREFIX}{im.size[0]}x{im.size[1]}:{digest}"
+    try:
+        setattr(im, _IMG_KEY_ATTR, key)
+    except Exception:
+        pass
+    return key
 
 
 def _cache() -> "OrderedDict[str, np.ndarray]":
@@ -276,6 +303,17 @@ class TasteEmbedder:
             if len(cache_keys) != len(pil_images):
                 raise ValueError("cache_keys length must match images")
             keys = [_norm_cache_key(k) for k in cache_keys]
+        # Кадр с pin_id запоминает ключ; гейты без ключа (gender/face/attr)
+        # потом попадают в тот же вектор, а не гоняют SigLIP заново.
+        for i, im in enumerate(pil_images):
+            if keys[i]:
+                if not getattr(im, _IMG_KEY_ATTR, None):
+                    try:
+                        setattr(im, _IMG_KEY_ATTR, keys[i])
+                    except Exception:
+                        pass
+            else:
+                keys[i] = _implicit_key(im)
 
         n = len(pil_images)
         out_rows: list[np.ndarray | None] = [None] * n
@@ -300,7 +338,7 @@ class TasteEmbedder:
                     _CACHE_HITS += 1
                 else:
                     disk_hit = None
-                    if key:
+                    if key and not key.startswith(_MEM_KEY_PREFIX):
                         disk_hit = _disk_load(key)
                     if disk_hit is not None:
                         cache[key] = disk_hit
@@ -338,7 +376,8 @@ class TasteEmbedder:
                         cache.move_to_end(key)
                         while len(cache) > EMBED_CACHE_MAX:
                             cache.popitem(last=False)
-                        _disk_save(key, vec)
+                        if not key.startswith(_MEM_KEY_PREFIX):
+                            _disk_save(key, vec)
                 for img_i, miss_j in alias_to_miss.items():
                     out_rows[img_i] = out_rows[miss_idx[miss_j]]
             elif self.dim <= 0 and out_rows and out_rows[0] is not None:
@@ -356,36 +395,56 @@ class TasteEmbedder:
         with _LOCK:
             if self._model is None:
                 self._load(None)
-            torch = self._torch
-            # SigLIP: padding="max_length"; CLIP: обычный padding
-            try:
-                inputs = self._processor(
-                    text=clean,
-                    padding="max_length",
-                    truncation=True,
-                    return_tensors="pt",
-                )
-            except Exception:
-                inputs = self._processor(
-                    text=clean,
-                    padding=True,
-                    truncation=True,
-                    return_tensors="pt",
-                )
-            inputs = {
-                k: v.to(self.device) if torch.is_tensor(v) else v
-                for k, v in inputs.items()
-                if k in ("input_ids", "attention_mask")
-            }
-            with torch.no_grad():
-                raw = self._model.get_text_features(**inputs)
-                feats = _feature_tensor(raw, torch).float()
-                feats = feats / feats.norm(p=2, dim=-1, keepdim=True).clamp_min(1e-6)
-            arr = feats.detach().cpu().numpy().astype(np.float32, copy=False)
-            if not np.isfinite(arr).all():
-                raise RuntimeError("текстовые эмбеддинги содержат NaN/Inf")
-            self.dim = int(arr.shape[1])
-            return arr
+            found: dict[str, np.ndarray] = {}
+            missing: list[str] = []
+            for t in dict.fromkeys(clean):
+                vec = _TEXT_VEC_CACHE.get((self.backend_id, t))
+                if vec is None:
+                    missing.append(t)
+                else:
+                    _TEXT_VEC_CACHE.move_to_end((self.backend_id, t))
+                    found[t] = vec
+            if missing:
+                arr = self._embed_texts_uncached(missing)
+                for t, vec in zip(missing, arr):
+                    found[t] = vec
+                    _TEXT_VEC_CACHE[(self.backend_id, t)] = vec
+                    while len(_TEXT_VEC_CACHE) > TEXT_CACHE_MAX:
+                        _TEXT_VEC_CACHE.popitem(last=False)
+            return np.stack([found[t] for t in clean], axis=0)
+
+    def _embed_texts_uncached(self, clean: list[str]) -> np.ndarray:
+        """Один text forward (вызывать под _LOCK)."""
+        torch = self._torch
+        # SigLIP: padding="max_length"; CLIP: обычный padding
+        try:
+            inputs = self._processor(
+                text=clean,
+                padding="max_length",
+                truncation=True,
+                return_tensors="pt",
+            )
+        except Exception:
+            inputs = self._processor(
+                text=clean,
+                padding=True,
+                truncation=True,
+                return_tensors="pt",
+            )
+        inputs = {
+            k: v.to(self.device) if torch.is_tensor(v) else v
+            for k, v in inputs.items()
+            if k in ("input_ids", "attention_mask")
+        }
+        with torch.no_grad():
+            raw = self._model.get_text_features(**inputs)
+            feats = _feature_tensor(raw, torch).float()
+            feats = feats / feats.norm(p=2, dim=-1, keepdim=True).clamp_min(1e-6)
+        arr = feats.detach().cpu().numpy().astype(np.float32, copy=False)
+        if not np.isfinite(arr).all():
+            raise RuntimeError("текстовые эмбеддинги содержат NaN/Inf")
+        self.dim = int(arr.shape[1])
+        return arr
 
     def _cosine_to_prob(self, cosines: np.ndarray) -> np.ndarray:
         """
@@ -426,7 +485,7 @@ class TasteEmbedder:
         """
         text = (slide_text or "").strip() or "lifestyle photo"
         t_vec = self.embed_texts([text])[0]
-        i_vec = self.embed_images([image.convert("RGB")])[0]
+        i_vec = self.embed_images([_rgb(image)])[0]
         cos = float(np.dot(t_vec, i_vec))
         return float(self._cosine_to_prob(np.array([cos]))[0])
 
@@ -445,7 +504,7 @@ class TasteEmbedder:
         t_vec = self.embed_texts([text])[0]
         if image_vecs is None:
             i_mat = self.embed_images(
-                [im.convert("RGB") for im in images],
+                [_rgb(im) for im in images],
                 cache_keys=cache_keys,
             )
         else:
