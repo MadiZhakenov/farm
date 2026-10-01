@@ -549,12 +549,12 @@ def pick_from_timeline(
 
 
 def export_clip(src: Path, pick: ClipPick, dest: Path) -> None:
+    from core.ugc_color import SDR_COLOR_ARGS, vf_scale_crop_fps_sdr
+
     ffmpeg = find_bin("ffmpeg")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    vf = (
-        f"scale={EXPORT_W}:{EXPORT_H}:force_original_aspect_ratio=increase,"
-        f"crop={EXPORT_W}:{EXPORT_H},fps={EXPORT_FPS}"
-    )
+    # Force SDR bt709 tags so phones don't treat clips as HLG (no tonemap).
+    vf = vf_scale_crop_fps_sdr(EXPORT_W, EXPORT_H, EXPORT_FPS)
     cmd = [
         ffmpeg, "-y",
         "-ss", f"{pick.start:.3f}",
@@ -566,6 +566,7 @@ def export_clip(src: Path, pick: ClipPick, dest: Path) -> None:
         "-preset", "veryfast",
         "-crf", "20",
         "-pix_fmt", "yuv420p",
+        *SDR_COLOR_ARGS,
         "-movflags", "+faststart",
         str(dest),
     ]

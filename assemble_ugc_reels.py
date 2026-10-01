@@ -19,6 +19,11 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 from core import renderer as R  # noqa: E402
+from core.ugc_color import (  # noqa: E402
+    SDR_COLOR_ARGS,
+    overlay_filter_sdr,
+    vf_scale_crop_fps_sdr,
+)
 
 CLIPS = ROOT / "output" / "clips_ugc"
 GIRL_DIR = CLIPS / "girl_1s"
@@ -473,8 +478,9 @@ def concat_clips(clips: list[Path], out_mp4: Path, work: Path) -> None:
     cmd = [
         ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(list_file),
         "-an",
-        "-vf", f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps=30,format=yuv420p",
+        "-vf", vf_scale_crop_fps_sdr(W, H, 30),
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        *SDR_COLOR_ARGS,
         "-t", "6.0",
         "-movflags", "+faststart",
         str(raw),
@@ -499,11 +505,10 @@ def burn_text_and_audio(
         "-i", str(video),
         "-stream_loop", "-1", "-i", str(audio),
         "-i", str(text_png),
-        "-filter_complex",
-        "[0:v][2:v]overlay=0:0:format=auto,format=yuv420p[v];"
-        "[1:a]atrim=0:6,asetpts=PTS-STARTPTS,volume=1.0[a]",
+        "-filter_complex", overlay_filter_sdr(),
         "-map", "[v]", "-map", "[a]",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
+        *SDR_COLOR_ARGS,
         "-c:a", "aac", "-b:a", "160k",
         "-t", "6.0",
         "-movflags", "+faststart",
