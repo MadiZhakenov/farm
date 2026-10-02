@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Тюнер звуков</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --card: #ffffff; --ink: #1d1d1f; --muted: #6e6e73; --line: #e3e1dc;
+    --wave: #b9b4aa; --wave-in: #3a3a3c; --win: rgba(255, 159, 10, .14); --win-edge: #ff9f0a;
+    --cut: #ff375f; --head: #0a84ff; --accent: #1d1d1f; --accent-ink: #fff; --ok: #30a46c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161618; --card: #1f1f22; --ink: #f2f2f4; --muted: #9a9aa0; --line: #2e2e33;
+      --wave: #55555c; --wave-in: #e6e6ea; --win: rgba(255, 159, 10, .16); --accent: #f2f2f4; --accent-ink: #161618;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.4 -apple-system, "Segoe UI", system-ui, sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px;
+           padding: 12px 20px; background: var(--bg); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  h1 { font-size: 16px; margin: 0; flex: 1; }
+  #status { color: var(--muted); font-size: 13px; }
+  #status.ok { color: var(--ok); }
+  button { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--ink);
+           border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .4; cursor: default; }
+  main { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 20px; padding: 20px; max-width: 1300px; margin: 0 auto; }
+  .side { position: sticky; top: 72px; align-self: start; }
+  video { width: 100%; aspect-ratio: 9 / 16; background: #000; border-radius: 12px; display: block; }
+  .side select { width: 100%; margin-top: 8px; font: inherit; padding: 6px; border-radius: 8px;
+                 border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+  .hint { color: var(--muted); font-size: 12.5px; margin-top: 10px; }
+  .hint b { color: var(--ink); font-weight: 600; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; margin-bottom: 16px; }
+  .card.active { border-color: var(--win-edge); box-shadow: 0 0 0 1px var(--win-edge); }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .name { font-weight: 700; font-size: 15px; }
+  .file { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 120px; }
+  .dirty { color: var(--win-edge); font-size: 12px; font-weight: 600; }
+  .ctrl { margin-top: 10px; }
+  .ctrl input { width: 84px; font: inherit; font-variant-numeric: tabular-nums; padding: 5px 8px;
+                border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  .play { min-width: 92px; font-weight: 600; }
+  canvas { display: block; width: 100%; border-radius: 8px; background: var(--bg); touch-action: none; }
+  canvas.over { height: 44px; margin-top: 10px; cursor: pointer; }
+  canvas.zoom { height: 120px; margin-top: 8px; cursor: grab; }
+  canvas.zoom.drag { cursor: grabbing; }
+  .legend { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  @media (max-width: 760px) {
+    main { grid-template-columns: minmax(0, 1fr); padding: 12px 16px; }
+    h1 { flex-basis: 100%; }
+    .side { position: static; max-width: 240px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Тюнер звуков · UGC 3part</h1>
+  <span id="status">загрузка…</span>
+  <button id="save" class="primary" disabled>Сохранить</button>
+</header>
+<main>
+  <div class="side">
+    <video id="video" playsinline muted></video>
+    <select id="vsel"></select>
+    <label class="hint"><input type="checkbox" id="loop"> повторять</label>
+    <div class="hint">
+      Видео без своего звука — играет выбранный трек с позиции <b>старт</b>.<br>
+      <b>Красная линия</b> — склейка на <span id="cutlbl">4.0</span> с (кульминация).<br>
+      Нижнюю волну тащи мышью — двигаешь звук под линию.<br>
+      <b>Пробел</b> — play/stop, <b>← →</b> — ±0.1 с, <b>Shift</b> — ±0.5 с.
+    </div>
+  </div>
+  <div id="cards"></div>
+</main>
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const ctx = new AudioContext();
+const video = $("#video");
+let S = null;            // state from server
+const T = {};            // per-sound: {buf, peaks, start, saved, el}
+let active = null;       // name of active card
+let playing = null;      // {name, src, gain, t0, start}
+const ZOOM_BEFORE = 3, ZOOM_AFTER = 3;
+
+const fmt = t => t.toFixed(2);
+const setStatus = (msg, ok = false) => { const s = $("#status"); s.textContent = msg; s.className = ok ? "ok" : ""; };
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+async function init() {
+  S = await (await fetch("/api/state")).json();
+  const vsel = $("#vsel");
+  S.videos.forEach((v, i) => vsel.add(new Option(v, i)));
+  vsel.onchange = () => loadVideo(+vsel.value);
+  await loadVideo(0);
+
+  for (const sd of S.sounds) {
+    const el = document.createElement("div");
+    el.className = "card";
+    el.innerHTML = `
+      <div class="row"><span class="name">${sd.name}</span><span class="file">${sd.file}</span><span class="dirty"></span></div>
+      <div class="row ctrl">
+        <button class="play">▶ Play</button>
+        <span>старт</span><input type="number" step="0.05" min="0">
+        <button data-d="-1">−1</button><button data-d="-0.5">−0.5</button><button data-d="-0.1">−0.1</button>
+        <button data-d="0.1">+0.1</button><button data-d="0.5">+0.5</button><button data-d="1">+1</button>
+        <button class="reset" title="вернуть сохранённое">↺</button>
+      </div>
+      <canvas class="over"></canvas>
+      <canvas class="zoom"></canvas>
+      <div class="legend"></div>`;
+    $("#cards").append(el);
+    T[sd.name] = { start: sd.start, saved: sd.start, el, buf: null };
+    wire(sd.name);
+  }
+  setStatus("декодирую звуки…");
+  await Promise.all(S.sounds.map(async sd => {
+    const ab = await (await fetch("/media/sound/" + sd.name)).arrayBuffer();
+    const t = T[sd.name];
+    t.buf = await ctx.decodeAudioData(ab);
+    t.mono = mixdown(t.buf);
+    setStart(sd.name, t.start, false);
+  }));
+  activate(S.sounds[0].name);
+  $("h1").textContent = `Тюнер звуков · ${S.preset}`;
+  $("#cutlbl").textContent = S.cut.toFixed(1);
+  setStatus(`старты из ${S.file}`);
+  requestAnimationFrame(tick);
+}
+
+async function loadVideo(i) {
+  stop();
+  const blob = await (await fetch("/media/video/" + i)).blob();
+  if (video.src) URL.revokeObjectURL(video.src);
+  video.src = URL.createObjectURL(blob);
+  video.currentTime = 0.05;  // показать первый кадр
+}
+
+function mixdown(buf) {
+  const n = buf.length, out = new Float32Array(n);
+  for (let c = 0; c < buf.numberOfChannels; c++) {
+    const d = buf.getChannelData(c);
+    for (let i = 0; i < n; i++) out[i] += d[i] / buf.numberOfChannels;
+  }
+  return out;
+}
+
+function wire(name) {
+  const t = T[name], el = t.el;
+  el.addEventListener("pointerdown", () => activate(name));
+  $(".play", el).onclick = () => (playing && playing.name === name ? stop() : play(name));
+  $("input", el).onchange = e => { setStart(name, +e.target.value); restartIfPlaying(name); };
+  el.querySelectorAll("[data-d]").forEach(b => b.onclick = () => { nudge(name, +b.dataset.d); });
+  $(".reset", el).onclick = () => { setStart(name, t.saved); restartIfPlaying(name); };
+
+  // обзор: клик ставит склейку в точку клика
+  const over = $(".over", el);
+  const overSet = e => {
+    const r = over.getBoundingClientRect();
+    setStart(name, (e.clientX - r.left) / r.width * t.buf.duration - S.cut);
+  };
+  over.addEventListener("pointerdown", e => {
+    if (!t.buf) return;
+    over.setPointerCapture(e.pointerId); overSet(e);
+    over.onpointermove = overSet;
+  });
+  over.addEventListener("pointerup", () => { over.onpointermove = null; restartIfPlaying(name); });
+
+  // зум: тащим волну под неподвижное окно
+  const zoom = $(".zoom", el);
+  zoom.addEventListener("pointerdown", e => {
+    if (!t.buf) return;
+    zoom.setPointerCapture(e.pointerId); zoom.classList.add("drag");
+    const x0 = e.clientX, s0 = t.start, span = S.total + ZOOM_BEFORE + ZOOM_AFTER;
+    const w = zoom.getBoundingClientRect().width;
+    zoom.onpointermove = ev => setStart(name, s0 - (ev.clientX - x0) / w * span);
+  });
+  zoom.addEventListener("pointerup", () => { zoom.onpointermove = null; zoom.classList.remove("drag"); restartIfPlaying(name); });
+}
+
+function activate(name) {
+  active = name;
+  for (const [n, t] of Object.entries(T)) t.el.classList.toggle("active", n === name);
+}
+
+function maxStart(t) { return t.buf ? Math.max(0, t.buf.duration - S.total) : 999; }
+
+function setStart(name, v, redraw = true) {
+  const t = T[name];
+  t.start = Math.round(Math.min(maxStart(t), Math.max(0, v)) * 100) / 100;
+  const inp = $("input", t.el);
+  if (document.activeElement !== inp) inp.value = fmt(t.start);
+  $(".dirty", t.el).textContent = Math.abs(t.start - t.saved) > 1e-6 ? `изменено (было ${fmt(t.saved)})` : "";
+  $(".legend", t.el).textContent =
+    `играет ${fmt(t.start)}–${fmt(t.start + S.total)} с трека · на склейке (${S.cut.toFixed(1)} с ролика) — ${fmt(t.start + S.cut)} с трека`;
+  $("#save").disabled = !Object.values(T).some(x => Math.abs(x.start - x.saved) > 1e-6);
+  draw(name);
+}
+
+let restartTimer = null;
+function nudge(name, d) { setStart(name, T[name].start + d); restartIfPlaying(name, 250); }
+function restartIfPlaying(name, delay = 0) {
+  if (!playing || playing.name !== name) return;
+  clearTimeout(restartTimer);
+  restartTimer = setTimeout(() => play(name), delay);
+}
+
+async function play(name) {
+  const t = T[name];
+  if (!t.buf) return;
+  stop();
+  activate(name);
+  await ctx.resume();
+  video.muted = true;
+  video.currentTime = 0;
+  try { await video.play(); } catch (e) { /* без видео — звук всё равно играет */ }
+  const off = Math.min(video.currentTime, 0.2);
+  const t0 = ctx.currentTime;
+  const gain = ctx.createGain();
+  const src = ctx.createBufferSource();
+  src.buffer = t.buf;
+  src.connect(gain).connect(ctx.destination);
+  // те же фейды, что в сборке: вход 0.08 с, выход последние 0.35 с
+  const end = t0 + (S.total - off);
+  gain.gain.setValueAtTime(off < 0.08 ? 0 : 1, t0);
+  if (off < 0.08) gain.gain.linearRampToValueAtTime(1, t0 + 0.08 - off);
+  gain.gain.setValueAtTime(1, end - 0.35);
+  gain.gain.linearRampToValueAtTime(0, end);
+  src.start(t0, t.start + off, S.total - off);
+  playing = { name, src, t0: t0 - off, start: t.start };
+  $(".play", t.el).textContent = "■ Stop";
+}
+
+function stop() {
+  if (!playing) return;
+  try { playing.src.stop(); } catch (e) {}
+  $(".play", T[playing.name].el).textContent = "▶ Play";
+  playing = null;
+  video.pause();
+}
+
+function tick() {
+  if (playing) {
+    const pos = ctx.currentTime - playing.t0;
+    if (pos >= S.total || video.ended) {
+      const n = playing.name;
+      stop();
+      if ($("#loop").checked) play(n);
+    }
+  }
+  for (const n in T) if (T[n].buf && (playing?.name === n || T[n].hadHead)) draw(n);
+  requestAnimationFrame(tick);
+}
+
+function sizeCanvas(c) {
+  const dpr = devicePixelRatio || 1, r = c.getBoundingClientRect();
+  const w = Math.round(r.width * dpr), h = Math.round(r.height * dpr);
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  return [c.getContext("2d"), w, h, dpr];
+}
+
+function wave(g, mono, sr, a, b, w, h, colorIn, colorOut, inA, inB) {
+  // a..b — секунды трека на ширину w; inA..inB — подсветка
+  const mid = h / 2;
+  for (let x = 0; x < w; x++) {
+    const s0 = a + (b - a) * x / w, s1 = a + (b - a) * (x + 1) / w;
+    const i0 = Math.max(0, Math.floor(s0 * sr)), i1 = Math.min(mono.length, Math.ceil(s1 * sr));
+    if (i1 <= i0) continue;
+    let mn = 0, mx = 0;
+    const step = Math.max(1, Math.floor((i1 - i0) / 200));
+    for (let i = i0; i < i1; i += step) { const v = mono[i]; if (v < mn) mn = v; if (v > mx) mx = v; }
+    g.fillStyle = s0 >= inA && s0 < inB ? colorIn : colorOut;
+    g.fillRect(x, mid - mx * mid * 0.95, 1, Math.max(1, (mx - mn) * mid * 0.95));
+  }
+}
+
+function draw(name) {
+  const t = T[name];
+  if (!t.buf) return;
+  const sr = t.buf.sampleRate, dur = t.buf.duration;
+  const cIn = css("--wave-in"), cOut = css("--wave"), cWin = css("--win"), cEdge = css("--win-edge"),
+        cCut = css("--cut"), cHead = css("--head"), cMuted = css("--muted");
+  const head = playing?.name === name ? playing.start + (ctx.currentTime - playing.t0) : null;
+  t.hadHead = head !== null;
+
+  // обзор всего трека
+  {
+    const c = $(".over", t.el), [g, w, h] = sizeCanvas(c);
+    g.clearRect(0, 0, w, h);
+    const X = s => s / dur * w;
+    g.fillStyle = cWin; g.fillRect(X(t.start), 0, X(t.start + S.total) - X(t.start), h);
+    wave(g, t.mono, sr, 0, dur, w, h, cIn, cOut, t.start, t.start + S.total);
+    g.fillStyle = cCut; g.fillRect(X(t.start + S.cut) - 1, 0, 2, h);
+    if (head !== null) { g.fillStyle = cHead; g.fillRect(X(head) - 1, 0, 2, h); }
+  }
+  // зум: окно 8 с неподвижно, волна двигается
+  {
+    const c = $(".zoom", t.el), [g, w, h, dpr] = sizeCanvas(c);
+    g.clearRect(0, 0, w, h);
+    const a = t.start - ZOOM_BEFORE, b = t.start + S.total + ZOOM_AFTER;
+    const X = s => (s - a) / (b - a) * w;
+    g.fillStyle = cWin; g.fillRect(X(t.start), 0, X(t.start + S.total) - X(t.start), h);
+    g.fillStyle = cEdge; g.fillRect(X(t.start), 0, 1.5 * dpr, h); g.fillRect(X(t.start + S.total) - 1.5 * dpr, 0, 1.5 * dpr, h);
+    wave(g, t.mono, sr, a, b, w, h, cIn, cOut, t.start, t.start + S.total);
+    // секунды ролика 0..8 сверху
+    g.font = `${11 * dpr}px system-ui, sans-serif`; g.fillStyle = cMuted;
+    for (let s = 0; s <= S.total; s++) {
+      const x = X(t.start + s);
+      g.fillRect(x, 0, 1, 5 * dpr);
+      g.fillText(s + "с", x + 3 * dpr, 13 * dpr);
+    }
+    g.fillStyle = cCut; g.fillRect(X(t.start + S.cut) - dpr, 0, 2 * dpr, h);
+    g.fillText("склейка", X(t.start + S.cut) + 4 * dpr, h - 6 * dpr);
+    if (head !== null) { g.fillStyle = cHead; g.fillRect(X(head) - dpr, 0, 2 * dpr, h); }
+  }
+}
+
+$("#save").onclick = async () => {
+  const body = {};
+  for (const [n, t] of Object.entries(T)) body[n] = t.start;
+  const r = await fetch("/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r.ok) return setStatus("ошибка сохранения");
+  for (const t of Object.values(T)) t.saved = t.start;
+  for (const n in T) setStart(n, T[n].start);
+  setStatus(`сохранено в ${S.file} — сборщик возьмёт эти старты`, true);
+};
+
+document.addEventListener("keydown", e => {
+  if (!active || e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if (e.code === "Space") { e.preventDefault(); playing ? stop() : play(active); }
+  else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+    e.preventDefault();
+    nudge(active, (e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? 0.5 : 0.1));
+  } else if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); $("#save").click(); }
+});
+window.addEventListener("beforeunload", e => { if (!$("#save").disabled) { e.preventDefault(); e.returnValue = ""; } });
+window.addEventListener("resize", () => { for (const n in T) draw(n); });
+
+init().catch(err => setStatus("ошибка: " + err.message));
+</script>
+</body>
+</html>

@@ -41,6 +41,8 @@ downloads/raw_materials_cozy/
 downloads/*.mp3
 downloads/*.mp4
 downloads/*.mov
+downloads/*.m4a
+downloads/*.MP4
 downloads/*.bak
 downloads/*.txt.bak
 
