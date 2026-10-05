@@ -1361,6 +1361,17 @@ anything that sounds like a corporate closing slide.
 - visual_scene on slides 2+: NEVER a second person's face, portrait, or stranger selfie.
   Prefer hands, feet, desk objects, rooms, streets, food, screens — no other faces.
 
+=== HOOK PHOTO (slide 1) — the scroll-stopper ===
+- If the hook names a person or relationship (dad, mom, sister, boyfriend, ex, best
+  friend, family), slide 1 visual_scene AND search_query MUST show that relationship
+  ("father daughter cafe", "mom daughter kitchen", "couple walking street",
+  "best friends cafe table"). The subtext of WHO is in the frame stops the scroll.
+- Otherwise prefer a human moment with a readable emotion or tension (hands over face,
+  staring out a window, sitting on the kitchen floor) over an empty prop still life.
+- Relationship words (father, daughter, mom, couple, friends) ARE allowed in the slide-1
+  search_query. Hair color / girl / guy / blonde / brunette stay banned everywhere.
+- Slides 2+ keep the no-new-faces rule above.
+
 TOPIC RELEVANCE: Hook + body MUST be uniquely synthesized from THIS topic's nouns.
 NEVER reuse fixed catchphrases. NEVER copy example lines from this prompt.
 Forbidden clone phrases: {stamps}
@@ -1411,7 +1422,9 @@ search_query rules:
 - HARD BAN: iphone / finsta / snapshot / 35mm / photo dump / moodboard-only
   ("cozy aesthetic", "dark academia", "aesthetic night").
 - phone ONLY if visual_scene is literally about waiting/texting/doomscroll.
-- candid|aesthetic ONLY as optional last word — never alone.
+- End the query with "candid" when it fits in 4 words (real phone photos, not stock).
+- NEVER use aesthetic / film photo / my / photo dump / iphone in search_query —
+  measured: they pull styled stock and collages.
 - BAN filler-only queries: "hands candid", "feet sneakers floor", "closed door candid"
   unless the slide text literally is about hands/feet/door.
 

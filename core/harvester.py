@@ -66,8 +66,8 @@ WIDE_SEARCH_CONCURRENCY = 8
 WIDE_VIBE_PER_SLIDE = 1
 # Пул до скачивания: квота на КАЖДЫЙ запрос (old: 10 на rescue-запрос),
 # иначе первые запросы цепочки съедают пул и pivot-углы не качаются вовсе
-WIDE_PINS_PER_QUERY = 12
-WIDE_PINS_PER_SLIDE = 48
+WIDE_PINS_PER_QUERY = 18  # кадры 13–24 выдачи не хуже первых (эксперимент 2026-10-05)
+WIDE_PINS_PER_SLIDE = 60
 WIDE_DOWNLOAD_CONCURRENCY = 24
 # API-проверка ИИ-метки — только кадрам, которые реально попали в списки
 WIDE_AI_CHECK_CONCURRENCY = 16
@@ -82,6 +82,10 @@ WIDE_RESCUE_PIVOT = 4
 # Ранг ступени поверх final ∈ [0, 1]: A (основные полы) > B (emergency) >
 # C (completion) > D (pool-soft) > E40 / E (nuclear: ugc ≥ 0.40 / любой)
 _WIDE_TIER_BONUS = {"A": 8.0, "B": 6.0, "C": 4.0, "D": 2.0, "E40": 1.0, "E": 0.0}
+# Штраф распределения за один предмет на двух слайдах (снеки ×2, дорога ×2):
+# больше разброса ранга внутри ступени (≤ 1), меньше шага ступени (2) —
+# берём другой кадр той же ступени, но не опускаемся ради этого ниже
+WIDE_SUBJECT_PENALTY = 1.5
 NUCLEAR_PREFER_UGC = 0.40
 
 # Text↔image (SigLIP) + финальный ранг после полной загрузки пула
@@ -2646,11 +2650,17 @@ def _wide_assign(
     vec_of: dict[str, Any],
     *,
     limit: int,
+    subjects: dict[str, str] | None = None,
+    exempt: set[int] | None = None,
 ) -> list[list[CandidateImage]]:
     """
     Глобальное распределение кадров по слайдам: max Σ final, один pin —
     один слайд, без визуальных близнецов (cos ≥ VISUAL_DEDUPE_COSINE_MAX).
-    Остальные eligible слайда идут альтернативами (без чужих победителей).
+    subjects (pin → предмет кадра): один предмет на двух слайдах — мягкий
+    штраф WIDE_SUBJECT_PENALTY (слайды из exempt — продукт — не считаются);
+    слайд ради этого не опустошается.
+    Остальные eligible слайда идут альтернативами (без чужих победителей),
+    кадры с предметом чужого победителя — в конце списка.
     """
     import numpy as np
 
@@ -2680,8 +2690,46 @@ def _wide_assign(
     # потом ступень, потом Σ final
     bonus = np.where(score > neg / 2, score + 100.0, neg)
 
+    exempt_rows = set(exempt or ())
+    subj = [str((subjects or {}).get(pid) or "other") for pid in pids]
+    subj_arr = np.array(subj, dtype=object)
+    # живость кадра (UGC): уход от повтора предмета не должен её снижать
+    live_of: dict[str, float] = {}
+    for el in eligible:
+        for c in el:
+            if getattr(c, "ugc_scored", False):
+                live_of[str(c.pin_id)] = float(c.ugc_score or 0.0)
+    live_col = np.array([live_of.get(pid, np.nan) for pid in pids], dtype=np.float64)
+
+    def _live_ok(base: dict[int, int], alt: dict[int, int]) -> bool:
+        """Замена ради разнообразия — только на почти такой же живой кадр."""
+        from core.carousel_rules import LIVE_MARGIN
+
+        for r, c in alt.items():
+            b = base.get(r)
+            if b is None or b == c:
+                continue
+            lb, la = live_col[b], live_col[c]
+            if not (np.isnan(lb) or np.isnan(la)) and la < lb - LIVE_MARGIN:
+                return False
+        return True
+
+    def _subject_pairs(w: dict[int, int]) -> list[tuple[int, int, int, int]]:
+        if not subjects:
+            return []
+        items = sorted((r, c) for r, c in w.items() if r not in exempt_rows)
+        out = []
+        for a in range(len(items)):
+            for b in range(a + 1, len(items)):
+                (ra, ca), (rb, cb) = items[a], items[b]
+                if subj[ca] != "other" and subj[ca] == subj[cb]:
+                    out.append((ra, ca, rb, cb))
+        return out
+
     def _objective(w: dict[int, int]) -> float:
-        return float(sum(bonus[r, c] for r, c in w.items()))
+        return float(sum(bonus[r, c] for r, c in w.items())) - (
+            WIDE_SUBJECT_PENALTY * len(_subject_pairs(w))
+        )
 
     def _twin(w: dict[int, int]) -> tuple[int, int, int, int] | None:
         if not VISUAL_DEDUPE_ENABLED:
@@ -2698,7 +2746,25 @@ def _wide_assign(
         w = _solve_assignment(np.where(forbid, neg, bonus), neg)
         tw = _twin(w)
         if tw is None:
-            return w
+            pairs = _subject_pairs(w)
+            if not pairs or depth <= 0:
+                return w
+            # Один предмет на двух слайдах: пробуем увести любой из двух,
+            # оставляем лучшее по Σ − штраф (в т.ч. как есть)
+            ra, ca, rb, cb = pairs[0]
+            fa = forbid.copy()
+            fa[ra] |= subj_arr == subj[cb]
+            fb = forbid.copy()
+            fb[rb] |= subj_arr == subj[ca]
+            cands = [w] + [
+                x
+                for x in (_solve(fa, depth - 1), _solve(fb, depth - 1))
+                if _live_ok(w, x)
+            ]
+            filled = max(len(x) for x in cands)
+            return max(
+                (x for x in cands if len(x) == filled), key=_objective
+            )
         ra, ca, rb, cb = tw
         if depth <= 0:
             # Не разрулили перебором — выкинуть близнеца с меньшим final
@@ -2715,6 +2781,13 @@ def _wide_assign(
         return wa if _objective(wa) >= _objective(wb) else wb
 
     winners = _solve(np.zeros_like(score, dtype=bool), 6)
+    if subjects:
+        left = _subject_pairs(winners)
+        print(
+            f"[WIDE] предметы победителей: "
+            f"{[subj[c] for _, c in sorted(winners.items())]}"
+            + (f" · повторов осталось {len(left)}" if left else "")
+        )
     for r, c in sorted(winners.items()):
         best_c = int(np.argmax(np.where(score[r] > neg / 2, score[r], -np.inf)))
         if best_c != c:
@@ -2754,6 +2827,13 @@ def _wide_assign(
                 for oc in others
             )
         ]
+        if subjects and i not in exempt_rows:
+            taken_subj = {
+                subj[c]
+                for r, c in winners.items()
+                if r != i and r not in exempt_rows and subj[c] != "other"
+            }
+            alts.sort(key=lambda c: subj[col[str(c.pin_id)]] in taken_subj)
         out.append([winner] + alts[: max(0, limit - 1)])
     return out
 
@@ -2901,7 +2981,7 @@ class PinterestHarvester:
     ) -> set[str]:
         # Slide-local + carousel-wide fails (don't re-search rainy window 6×)
         out = set(self._run_failed_queries)
-        out |= self._slide_failed_queries.get(int(slide_index), ())
+        out |= self._slide_failed_queries.get(int(slide_index), set())
         for a in extra or ():
             low = (a or "").strip().lower()
             if low:
@@ -5828,6 +5908,7 @@ class PinterestHarvester:
                     chain.append(fq)
 
         # ---- wave 1: план ----
+        roles_w = list(getattr(self, "_slide_roles", None) or [])
         plans: dict[int, list[str]] = {}
         for pos, (q, text, idx, scene, alts) in enumerate(normalized):
             chain: list[str] = []
@@ -5863,6 +5944,22 @@ class PinterestHarvester:
         self._wide_score(list(by_pid.values()), vec_of)
 
         plans2: dict[int, list[str]] = {}
+        subj_cache: dict[str, str] = {}
+
+        def _subject_kw() -> dict[str, Any]:
+            """Предмет каждого кадра пула (метки SigLIP из carousel_rules)."""
+            try:
+                from core.carousel_rules import get_photo_classifier
+
+                clf = get_photo_classifier()
+                for pid, v in vec_of.items():
+                    if pid not in subj_cache:
+                        subj_cache[pid] = clf.subject_of_vector(v)[0]
+            except Exception as exc:
+                print(f"[WIDE] subject labels fail: {exc}")
+                return {}
+            exempt = {pos for pos, r in enumerate(roles_w) if r == "product"}
+            return {"subjects": dict(subj_cache), "exempt": exempt}
 
         def _slide_kw(pos: int) -> dict[str, Any]:
             _q, text, idx, scene, _a = normalized[pos]
@@ -5877,11 +5974,31 @@ class PinterestHarvester:
             )
 
         pool = list(by_pid.values())
+
+        def _own_eligible(pos: int, *, tiers: bool = False) -> list[CandidateImage]:
+            """
+            Общий пул, как раньше: живых бытовых кадров в нём больше (только
+            «свои» кадры давали сток, проверка 2026-10-02). _wide_own — кадр
+            найден запросом ЭТОГО слайда: в банк филлеров идут только такие,
+            чтобы под «tea mug» не сохранялась пачка чипсов хука.
+            """
+            mine = {q.lower() for q in plans[pos] + plans2.get(pos, [])}
+            own_ids = {
+                pid
+                for pid in by_pid
+                if any(q.lower() in mine for q in pin_queries.get(pid, ()))
+            }
+            el = self._wide_slide_eligible(
+                list(by_pid.values()), vec_of, tiers=tiers, **_slide_kw(pos)
+            )
+            for c in el:
+                c._wide_own = str(c.pin_id) in own_ids
+            return el
+
         eligible: list[list[CandidateImage]] = [
-            self._wide_slide_eligible(pool, vec_of, **_slide_kw(pos))
-            for pos in range(n)
+            _own_eligible(pos) for pos in range(n)
         ]
-        kept_lists = _wide_assign(eligible, vec_of, limit=max(limit, 1))
+        kept_lists = _wide_assign(eligible, vec_of, limit=max(limit, 1), **_subject_kw())
         gaps = [pos for pos in range(n) if not kept_lists[pos]]
 
         # ---- wave 2: пустые слайды — rescue-углы одной волной ----
@@ -5893,13 +6010,14 @@ class PinterestHarvester:
                 # каждому слайду считается по нему же
                 tried = {c.lower() for c in plans[pos]}
                 chain = []
+                rescue_topic = topic
                 try:
                     _add(
                         chain,
                         vibe_rescue_queries(
                             slide_text=text,
                             visual_scene=scene,
-                            topic=topic,
+                            topic=rescue_topic,
                             avoid=tried,
                             max_n=WIDE_RESCUE_VIBE,
                         ),
@@ -5910,10 +6028,10 @@ class PinterestHarvester:
                         style_pivot_queries(
                             avoid=tried | {c.lower() for c in chain},
                             max_n=WIDE_RESCUE_PIVOT,
-                            seed_text=f"{scene} {text} {topic}",
+                            seed_text=f"{scene} {text} {rescue_topic}",
                             slide_text=text,
                             visual_scene=scene,
-                            topic=topic,
+                            topic=rescue_topic,
                         ),
                         text,
                     )
@@ -5938,12 +6056,10 @@ class PinterestHarvester:
                 )
             pool = list(by_pid.values())
             for pos in gaps:
-                eligible[pos] = self._wide_slide_eligible(
-                    pool, vec_of, tiers=True, **_slide_kw(pos)
-                )
+                eligible[pos] = _own_eligible(pos, tiers=True)
 
         # ---- распределение + ИИ-метка финалистам (до стабилизации) ----
-        kept_lists = _wide_assign(eligible, vec_of, limit=max(limit, 1))
+        kept_lists = _wide_assign(eligible, vec_of, limit=max(limit, 1), **_subject_kw())
         for rnd in range(WIDE_AI_RECHECK_ROUNDS + 1):
             finalists = [
                 pin_meta[str(c.pin_id)]
@@ -5964,7 +6080,7 @@ class PinterestHarvester:
                 [c for c in el if str(c.pin_id) not in bad] for el in eligible
             ]
             if rnd < WIDE_AI_RECHECK_ROUNDS:
-                kept_lists = _wide_assign(eligible, vec_of, limit=max(limit, 1))
+                kept_lists = _wide_assign(eligible, vec_of, limit=max(limit, 1), **_subject_kw())
             else:
                 # Раунды кончились: всё в списках проверено, флаги — вон
                 kept_lists = [
@@ -6506,6 +6622,7 @@ class PinterestHarvester:
         max_attempts: int = MAX_QUERY_ATTEMPTS,
         max_workers: int = 6,
         character_dna: dict[str, str] | None = None,
+        roles: list[str] | None = None,
     ) -> list[tuple[list[CandidateImage], HarvestProgress, str]]:
         """
         1) asyncio.gather — параллельный Pinterest search+CDN всех слайдов
@@ -6513,10 +6630,13 @@ class PinterestHarvester:
 
         slides: (query, text, idx) или (query, text, idx, visual_scene)
         character_dna: optional passport -> attribute + gender lock
+        roles: роль каждого слайда (scene / product / neutral / final) —
+               слайд с продуктом не участвует в штрафе за повтор предмета
         """
         n = len(slides)
         if n == 0:
             return []
+        self._slide_roles = list(roles) if roles else None
 
         self.last_attribute_consistency: str | None = None
         dna = character_dna if isinstance(character_dna, dict) else None

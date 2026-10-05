@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """
-Правила уровня всей карусели (фидбек 2026-09-29, пачка 06_food_body_image).
+Правила уровня всей карусели (фидбек 2026-09-29, пачка 06_food_body_image;
+фидбек команды 2026-10-02 — «смысловые / несмысловые слайды», чипсы ×3).
 
-1. Роли слайдов:
-     1-й слайд            -> scene   (кадр по сценарию)
-     середина             -> scene / neutral по очереди
+1. Роли слайдов (смысловые — буквально по тексту, филлеры — настроение):
+     1-й слайд            -> scene   (хук, кадр по сценарию)
+     слайд с продуктом    -> product (кадр по сценарию, лимит предмета не действует)
+     без продукта         -> один scene в середине (второй смысловой)
+     остальная середина   -> neutral (филлер из своего «семейства» сцен)
      последний слайд      -> final   (всегда приятный нейтральный)
    Для тяжёлых тем (депрессия, горе, одиночество…) нейтральные кадры
    в середине могут быть тёмными/moody, последний — спокойный, но не грязный.
+   Филлеры — только «живые» запросы (FILLER_LIVENESS по факту прогонов) и
+   с предметами, которых ещё нет в карусели; смысловые слайды с одним
+   предметом в запросе разводятся до поиска.
 
 2. Грязь (грязная посуда, мусор, разлитое, гора снеков):
      не больше MAX_MESS_NORMAL кадров на карусель (для тяжёлых тем
@@ -16,8 +22,12 @@
 3. Одно место (кухня+холодильник, кровать, стол…) — не больше
    MAX_SAME_PLACE слайдов на карусель.
 
-4. Одно фото — одна карусель на всю серию: pin_id + отпечаток картинки
-   (dHash) сверяются с учётом в PhotoVault.
+4. Один предмет (снеки, дорога, окно, напиток, машина…) — не больше
+   MAX_SAME_SUBJECT кадров на карусель; слайд с продуктом не считается.
+
+5. Одно фото — одна карусель на всю серию: pin_id + отпечаток картинки
+   (dHash) сверяются с учётом в PhotoVault. Филлеры (neutral/final) можно
+   переиспользовать (банк филлеров батча, core/filler_bank.py).
 
 Модуль не лезет в сеть. Картинки оцениваются тем же SigLIP, что и весь
 пайплайн (core.taste_embedder); в тестах подставляется фейковый классификатор.
@@ -37,13 +47,30 @@ from PIL import Image
 # ---------------------------------------------------------------------------
 
 ROLE_SCENE = "scene"
+ROLE_PRODUCT = "product"
 ROLE_NEUTRAL = "neutral"
 ROLE_FINAL = "final"
+SEMANTIC_ROLES = frozenset({ROLE_SCENE, ROLE_PRODUCT})
+FILLER_ROLES = frozenset({ROLE_NEUTRAL, ROLE_FINAL})
 
 RULES_ENABLED = True
 MAX_MESS_NORMAL = 1
 MAX_MESS_HEAVY = 2
 MAX_SAME_PLACE = 2
+MAX_SAME_SUBJECT = 1
+# Замена кадра ради разнообразия предмета — только на кадр не менее живой
+# (UGC-оценка пайплайна) больше чем на LIVE_MARGIN; иначе повтор остаётся.
+# Цель — простые живые фото, разнообразие вторично (проверка 2026-10-02).
+LIVE_MARGIN = 0.05
+
+
+def _live(c: Any) -> float | None:
+    if getattr(c, "ugc_scored", False):
+        try:
+            return float(getattr(c, "ugc_score", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return None
+    return None
 # Сколько кандидатов слайда проверять (кандидаты уже отсортированы по рангу)
 MAX_CHECK_PER_SLIDE = 8
 
@@ -127,6 +154,35 @@ PLACE_PROMPTS: dict[str, tuple[str, ...]] = {
     "other": ("a photo of an object", "a hallway", "the sky"),
 }
 
+# Предмет кадра (что на фото), zero-shot по тем же эмбеддингам SigLIP.
+# Проверено на 30 каруселях пачек 2026-10-01: чипсы -> snacks ~1.0,
+# дорога -> road ~0.99, сумка в зал -> gym ~1.0; спорные кадры ниже 0.6.
+SUBJECT_PROMPTS: dict[str, tuple[str, ...]] = {
+    "snacks": ("a bag of chips", "snack bags and candy", "junk food snacks", "a bag of crisps on a couch"),
+    "plate": ("a plate of food", "a meal on a plate", "a bowl of food", "breakfast on a plate"),
+    "fruit": ("a bowl of fruit", "strawberries", "fresh fruit on a table"),
+    "drink": ("a cup of coffee", "a mug of tea", "a glass of water", "an iced coffee"),
+    "kitchen": ("a kitchen counter", "an open fridge", "a pantry shelf", "a kitchen at night"),
+    "window": ("a window with curtains", "a view through a window", "a windowsill", "rain on a window"),
+    "road": ("a road", "a city street", "a sidewalk", "a street at night"),
+    "car": ("inside a car", "a car steering wheel", "a car interior at night", "a bus window"),
+    "bed": ("a bed with pillows", "a bedroom with a bed", "lying in bed"),
+    "desk": ("a desk with a laptop", "a desk with notebooks", "a work desk"),
+    "phone": ("a phone screen", "a hand holding a smartphone"),
+    "sky": ("the sky", "a sunset sky", "clouds", "a night sky"),
+    "plants": ("flowers in a vase", "potted plants", "a garden"),
+    "book": ("an open book", "a stack of books"),
+    "bathroom": ("a bathroom mirror", "a bathroom sink"),
+    "gym": ("a gym bag", "sneakers and workout gear", "a gym"),
+    "clothes": ("folded clothes", "a pile of clothes", "an outfit on a chair"),
+    "groceries": ("grocery bags", "a supermarket aisle"),
+    "person": ("a portrait of a woman", "a selfie of a person", "a person's face"),
+    "pets": ("a cat", "a dog", "a pet on a lap"),
+    "room": ("a cozy living room", "a couch in a room", "a hallway"),
+}
+SUBJECT_TEMP = 0.01
+SUBJECT_MIN_PROB = 0.6
+
 # ---------------------------------------------------------------------------
 # 1. Роли слайдов
 # ---------------------------------------------------------------------------
@@ -163,10 +219,14 @@ def is_heavy_topic(topic: str = "", texts: Iterable[str] = ()) -> bool:
     return any(c in blob for c in _HEAVY_CUES)
 
 
-def plan_roles(n: int) -> list[str]:
+def plan_roles(n: int, *, product_index: int | None = None) -> list[str]:
     """
-    6 слайдов -> scene, scene, neutral, scene, neutral, final
-    7 слайдов -> scene, scene, neutral, scene, neutral, scene, final
+    Середина — сцена / филлер по очереди: сценные слайды ищутся буквально по
+    тексту и дают живые бытовые кадры (только хук + продукт давали в 2 раза
+    больше филлеров и сток, проверка 2026-10-02). Слайд с продуктом —
+    смысловой (product).
+      6 слайдов            -> scene, scene, neutral, scene, neutral, final
+      6 слайдов, продукт 2 -> scene, scene, product, scene, neutral, final
     """
     n = int(n)
     if n <= 0:
@@ -177,68 +237,284 @@ def plan_roles(n: int) -> list[str]:
     roles[-1] = ROLE_FINAL
     for i in range(1, n - 1):
         roles[i] = ROLE_SCENE if i % 2 == 1 else ROLE_NEUTRAL
+    if product_index is not None and 0 < int(product_index) < n - 1:
+        roles[int(product_index)] = ROLE_PRODUCT
     return roles
 
 
-# Все запросы проверены через finalize_photo_query (проходят без обрезки)
+def product_names(product: str = "") -> list[str]:
+    """
+    Имена продукта из поля «Продукт»: «Приложение FocusFlow: лимит 3 задачи»
+    -> ["focusflow"], «Cozy Home» -> ["cozy home"].
+    """
+    import re
+
+    raw = (product or "").strip()
+    if not raw:
+        return []
+    head = re.split(r"[:—–\-|(]", raw, maxsplit=1)[0].strip()
+    head = re.sub(
+        r"^(приложение|приложуха|app|the app|application|игра|game)\s+",
+        "",
+        head,
+        flags=re.I,
+    ).strip()
+    head = re.sub(r"\s+(app|application|приложение)$", "", head, flags=re.I).strip()
+    names: list[str] = []
+    if head:
+        names.append(head.lower())
+    # бренд-слова латиницей с заглавной (FocusFlow, Cozy, Magic Sort)
+    for brand in re.findall(r"\b[A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+)*", raw):
+        b = brand.lower()
+        if b not in names and b not in {"app", "the"}:
+            names.append(b)
+    return names
+
+
+def find_product_slide(texts: Sequence[str], product: str = "") -> int | None:
+    """Индекс слайда (не хук и не финал), где назван продукт."""
+    import re
+
+    pats = [
+        re.compile(r"(?<!\w)" + re.escape(n) + r"(?!\w)")
+        for n in product_names(product)
+        if len(n) >= 3
+    ]
+    if not pats:
+        return None
+    for i, text in enumerate(texts):
+        low = (text or "").lower()
+        if 0 < i < len(texts) - 1 and any(p.search(low) for p in pats):
+            return i
+    return None
+
+
+# Банк филлер-запросов — по замеру выдачи Pinterest (probe_query_liveness.py,
+# 2026-10-05; out/filler_bank_probe, out/query_liveness_v2): в первых 12
+# кадрах ≥ 4 «живых без лица» (UGC ≥ 0.55, лиц нет), лица ≤ 25%, ИИ-метка
+# ≤ 20%, чистильщик запросов оставляет запрос как есть. Форма «pov … /
+# … candid / … real life» даёт живые фото; натюрморты и интерьеры
+# («flowers vase table», «sheer curtains bedroom window») — сток (0 из 12).
 NEUTRAL_LIGHT: tuple[str, ...] = (
-    "tea mug windowsill",
-    "hands holding coffee cup",
-    "coffee cup cafe table",
-    "walking city street daytime",
-    "book coffee table",
-    "sneakers walking sidewalk",
-    "sheer curtains bedroom window",
-    "flowers vase table",
-    "park bench trees autumn",
-    "bicycle city street",
-    "bare feet wooden floor",
-    "potted plant windowsill",
-    "window seat book",
-    "autumn leaves sidewalk",
-    "city tram window",
+    "pov reading book candid",
+    "pov walking dog",
+    "pov holding flowers candid",
+    "pov headphones couch",
+    "pov driving car",
+    "pov watering plants",
+    "pov sunset walk",
     "sky clouds window",
+    "pov cat lap",
+    "pov working laptop",
+    "pov park walk",
+    "pov holding phone bed",
+    "pov looking out window",
+    "sneakers walking sidewalk",
+    "standing sneakers floor hallway",
+    "flowers bouquet candid",
+    "pov lying bed",
+    "phone screen text candid",
 )
 NEUTRAL_FOOD: tuple[str, ...] = (
-    "strawberries bowl table",
-    "breakfast table croissant",
-    "fruit bowl kitchen table",
-    "farmers market fruit",
-    "iced coffee cafe",
-    "lemons bowl table",
-    "bakery window pastries",
-    "herbs kitchen windowsill",
-    "fresh bread bakery",
+    "pov drinking tea candid",
+    "pov drinking coffee",
+    "coffee cup real life",
+    "tea mug real life",
+    "coffee cup candid",
 )
 NEUTRAL_MOODY: tuple[str, ...] = (
-    "rainy window city",
-    "bus window night city",
-    "street night walk",
-    "candle table dark room",
-    "rain car window",
-    "night sky balcony",
+    "car window night candid",
+    "laptop bed night candid",
+    "pov walking rain",
+    "pov looking out window",
+    "pov lying bed",
+    "pov holding phone bed",
+    "pov headphones couch",
+    "pov drinking tea candid",
 )
 FINAL_PLEASANT: tuple[str, ...] = (
-    "tea mug windowsill",
-    "flowers vase table",
-    "sunset sky walk",
-    "hands holding coffee cup",
-    "sheer curtains bedroom window",
-    "book tea cozy",
-    "coffee cup cafe table",
-    "potted plant windowsill",
-    "window seat book",
-    "sunset city skyline",
-    "clean kitchen table flowers",
+    "pov sunset walk",
+    "sky clouds window",
+    "pov holding flowers candid",
+    "pov walking dog",
+    "pov cat lap",
+    "coffee cup real life",
+    "pov reading book candid",
+    "flowers bouquet candid",
+    "pov watering plants",
 )
 FINAL_CALM: tuple[str, ...] = (
-    "tea mug windowsill",
-    "candle book cozy",
-    "hands holding tea",
-    "sunset sky walk",
-    "sheer curtains bedroom window",
-    "book tea cozy",
+    "pov drinking tea candid",
+    "tea mug real life",
+    "pov reading book candid",
+    "pov cat lap",
+    "pov looking out window",
+    "sky clouds window",
+    "pov holding flowers candid",
 )
+
+# Доля «живых без лица» в первых 12 кадрах выдачи (замер 2026-10-05).
+# Нет в таблице — считается достаточной.
+FILLER_LIVENESS: dict[str, float] = {
+    "pov cat lap": 0.917,
+    "pov reading book candid": 0.667,
+    "pov walking dog": 0.667,
+    "pov holding flowers candid": 0.583,
+    "pov holding flowers": 0.583,
+    "car window night candid": 0.583,
+    "pov headphones couch": 0.5,
+    "laptop bed night candid": 0.5,
+    "pov drinking tea candid": 0.5,
+    "pov driving car": 0.5,
+    "pov watering plants": 0.5,
+    "pov sunset walk": 0.5,
+    "sky clouds window": 0.417,
+    "flowers bouquet candid": 0.417,
+    "phone screen text candid": 0.417,
+    "pov working laptop": 0.417,
+    "pov drinking coffee": 0.333,
+    "pov park walk": 0.333,
+    "pov holding phone bed": 0.333,
+    "coffee cup real life": 0.333,
+    "pov walking rain": 0.333,
+    "tea mug real life": 0.333,
+    "pov looking out window": 0.333,
+    "pov lying bed": 0.333,
+    "sneakers walking sidewalk": 0.333,
+    "coffee cup candid": 0.333,
+    "standing sneakers floor hallway": 0.333,
+    # прежние филлеры — сток по замеру (для дозапросов и старых записей)
+    "flowers vase table": 0.0,
+    "sheer curtains bedroom window": 0.0,
+    "window seat book": 0.0,
+    "sunset city skyline": 0.0,
+    "book coffee table": 0.0,
+    "fresh bread bakery": 0.0,
+    "strawberries bowl table": 0.0,
+    "breakfast table croissant": 0.0,
+    "park bench trees autumn": 0.0,
+}
+FILLER_LIVE_MIN = 0.33
+
+
+def filler_liveness(query: str) -> float:
+    return FILLER_LIVENESS.get((query or "").strip().lower(), 0.5)
+
+
+# Предмет, который скорее всего окажется на кадре по запросу (те же имена,
+# что в SUBJECT_PROMPTS). Нужен ДО поиска: два слайда с одним предметом в
+# запросе — это и есть «чипсы ×3 / кофе ×4».
+QUERY_SUBJECT_WORDS: dict[str, tuple[str, ...]] = {
+    "drink": ("coffee", "tea", "mug", "cup", "latte", "iced", "glass", "water", "matcha", "drink"),
+    "road": ("street", "sidewalk", "walk", "walking", "sneakers", "bicycle", "road", "crosswalk"),
+    "sky": ("sky", "sunset", "sunrise", "clouds", "skyline"),
+    "window": ("window", "windowsill", "curtains"),
+    "car": ("car", "bus", "tram", "train", "steering", "wheel", "subway"),
+    "plants": ("flowers", "flower", "plant", "plants", "vase", "herbs", "garden", "bouquet"),
+    "fruit": ("fruit", "strawberries", "lemons", "apples", "apple", "banana", "berries", "oranges"),
+    "plate": ("plate", "bowl", "breakfast", "croissant", "bread", "pastries", "pasta", "meal",
+              "dinner", "lunch", "salad", "toast", "eggs", "oatmeal", "soup", "sandwich"),
+    "snacks": ("chip", "chips", "crisps", "crisp", "snack", "snacks", "candy", "cookies",
+               "cookie", "crackers", "pretzel", "pretzels", "chocolate"),
+    "kitchen": ("kitchen", "fridge", "pantry", "counter", "stove", "freezer"),
+    "desk": ("desk", "laptop", "notebook", "computer", "keyboard", "planner"),
+    "bed": ("bed", "sheets", "pillow", "pillows", "blanket", "duvet"),
+    "book": ("book", "books", "reading"),
+    "room": ("floor", "feet", "couch", "sofa", "hallway", "rug"),
+    "candle": ("candle", "candles"),
+    "phone": ("phone", "screen", "scrolling"),
+    "gym": ("gym", "workout", "dumbbell", "dumbbells", "yoga", "treadmill"),
+    "clothes": ("hoodie", "shirt", "clothes", "laundry", "jeans", "sweater", "outfit"),
+    "bathroom": ("bathroom", "mirror", "shower", "bathtub"),
+    "groceries": ("grocery", "groceries", "supermarket", "cart"),
+    "pets": ("cat", "cats", "kitten", "dog", "dogs", "puppy"),
+}
+_WORD_SUBJECT = {w: k for k, ws in QUERY_SUBJECT_WORDS.items() for w in ws}
+
+
+def query_subjects(query: str) -> set[str]:
+    """Все предметы, названные в запросе (для разведения смысловых слайдов)."""
+    import re
+
+    return {
+        _WORD_SUBJECT[w]
+        for w in re.findall(r"[a-z]+", (query or "").lower())
+        if w in _WORD_SUBJECT
+    }
+
+
+# Главный предмет кадра, если в запросе их несколько: «bus window» — автобус,
+# «sky clouds window» — небо, «tea mug windowsill» — напиток
+_SUBJECT_PRIORITY = (
+    "snacks", "fruit", "plate", "drink", "car", "phone", "gym", "groceries",
+    "bathroom", "clothes", "desk", "bed", "candle", "book", "plants",
+    "kitchen", "pets", "sky", "road", "window", "room",
+)
+
+
+def query_subject(query: str) -> str:
+    subj = query_subjects(query)
+    return next((s for s in _SUBJECT_PRIORITY if s in subj), "other")
+
+
+# Проверка запросов до поиска: «главное существительное» запроса —
+# слова без общих (время суток, ракурс, настроение, действие)
+_GENERIC_QUERY_WORDS = frozenset(
+    {
+        "a", "an", "the", "of", "on", "in", "at", "with", "and",
+        "candid", "aesthetic", "cozy", "night", "morning", "evening",
+        "daytime", "day", "dark", "dim", "light", "soft", "warm", "alone",
+        "home", "photo", "close", "closeup", "up", "pov", "standing",
+        "sitting", "walking", "looking", "holding", "hands", "hand",
+        "empty", "quiet", "calm", "clean", "fresh", "old", "new", "small",
+        "big", "late", "early", "city", "room", "table", "floor", "bag",
+    }
+)
+_NOUN_SYNONYMS: dict[str, str] = {
+    "crisp": "chip",
+    "chips": "chip",
+    "snacks": "snack",
+    "mug": "cup",
+    "latte": "coffee",
+    "espresso": "coffee",
+    "fridge": "fridge",
+    "refrigerator": "fridge",
+    "road": "street",
+    "sidewalk": "street",
+    "pavement": "street",
+    "windowsill": "window",
+    "auto": "car",
+}
+
+
+def query_nouns(query: str) -> set[str]:
+    """Значимые слова запроса (ед. число, синонимы сведены)."""
+    import re
+
+    out: set[str] = set()
+    for w in re.findall(r"[a-z]+", (query or "").lower()):
+        if w in _GENERIC_QUERY_WORDS or len(w) < 3:
+            continue
+        w = _NOUN_SYNONYMS.get(w, w)
+        if len(w) > 3 and w.endswith("ies"):
+            w = w[:-3] + "y"
+        elif len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
+            w = w[:-1]
+        out.add(_NOUN_SYNONYMS.get(w, w))
+    return out
+
+
+def queries_conflict(a: str, b: str) -> bool:
+    """
+    Два запроса тянут один предмет («chip bag couch» / «chips bag counter»,
+    «coffee mug desk» / «hands holding coffee cup») или это один и тот же
+    запрос другими словами.
+    """
+    sa, sb = query_subjects(a), query_subjects(b)
+    if sa and sb:
+        return bool(sa & sb)
+    na, nb = query_nouns(a), query_nouns(b)
+    return bool(na) and na == nb
 
 _FOOD_CUES: tuple[str, ...] = (
     "food",
@@ -289,9 +565,18 @@ def neutral_plan(
     heavy: bool = False,
     seed: Any = "",
     taken: set[str] | None = None,
+    used_subjects: set[str] | None = None,
+    avoid_queries: Sequence[str] = (),
+    prefer: Iterable[str] = (),
 ) -> SlidePhotoPlan:
-    """Нейтральный / финальный запрос. Не повторяет запросы из taken."""
+    """
+    Нейтральный / финальный запрос из одобренных пулов. Порядок важности:
+    живой запрос (FILLER_LIVENESS ≥ FILLER_LIVE_MIN) → предмет, которого
+    ещё нет в карусели (used_subjects, предметы avoid_queries) → не
+    повторять запросы из taken. prefer — запросы с кадрами в банке филлеров.
+    """
     taken = taken if taken is not None else set()
+    used_subjects = used_subjects if used_subjects is not None else set()
     blob = f"{topic} {slide_text}".lower()
     foodish = any(c in blob for c in _FOOD_CUES)
     if role == ROLE_FINAL:
@@ -308,10 +593,45 @@ def neutral_plan(
         mood = "quiet moody" if heavy else "calm neutral"
     start = _stable_seed(topic, seed, role, slide_index) % len(pool)
     ordered = pool[start:] + pool[:start]
-    free = [q for q in ordered if q.lower() not in taken] or ordered
+    preferred = {p.lower() for p in prefer}
+    if preferred:
+        ordered = [q for q in ordered if q.lower() in preferred] + [
+            q for q in ordered if q.lower() not in preferred
+        ]
+    busy = set(used_subjects)
+    for a in avoid_queries:
+        busy |= query_subjects(a)
+
+    def ok(q: str, *, live: bool, subject: bool) -> bool:
+        if q.lower() in taken:
+            return False
+        if live and filler_liveness(q) < FILLER_LIVE_MIN:
+            return False
+        if subject and query_subject(q) in busy:
+            return False
+        return True
+
+    free: list[str] = []
+    # живость важнее разнообразия: сначала живой запрос с новым предметом,
+    # потом живой с повтором, и только потом стоковый
+    for live, subject in ((True, True), (True, False), (False, True), (False, False)):
+        free = [q for q in ordered if ok(q, live=live, subject=subject)]
+        if free:
+            break
+    free = free or ordered
     query = free[0]
-    alts = [q for q in free[1:3]]
+    # альты — живые запросы с тем же предметом (слайд остаётся «кофе» / «улицей»)
+    subj = query_subject(query)
+    same = [
+        q for q in ordered
+        if q != query and q.lower() not in taken
+        and filler_liveness(q) >= FILLER_LIVE_MIN
+        and (query_subject(q) == subj or query_subject(q) not in busy)
+    ]
+    alts = same[:2]
     taken.add(query.lower())
+    if subj != "other":
+        used_subjects.add(subj)
     scene = f"{mood} everyday photo, {query}, clean and tidy, nothing dirty"
     return SlidePhotoPlan(
         role=role,
@@ -322,6 +642,19 @@ def neutral_plan(
     )
 
 
+# «candid» в конце сценного запроса: +0.08 живости на реальных запросах
+# Gemini, тема кадра не меняется (эксперимент 2026-10-05, 15 из 18). Чистильщик
+# режет запросы длиннее 4 слов — берём первые 3 слова сцены.
+_CANDID_DROP = frozenset({"candid", "alone", "aesthetic", "film", "my"})
+
+
+def candid_variant(query: str) -> str:
+    words = [w for w in (query or "").split() if w.lower() not in _CANDID_DROP]
+    if len(words) < 2:
+        return ""
+    return " ".join(words[:3] + ["candid"])
+
+
 def build_photo_plans(
     texts: Sequence[str],
     scene_specs: Sequence[tuple[str, str, list[str]]],
@@ -329,43 +662,86 @@ def build_photo_plans(
     topic: str = "",
     seed: Any = "",
     enabled: bool = True,
+    product: str = "",
+    prefer: Iterable[str] = (),
 ) -> tuple[list[SlidePhotoPlan], bool]:
     """
     scene_specs[i] = (query, visual_scene, alts) — сценарный запрос слайда
     (как раньше строил query_forge). Для neutral/final слайдов заменяется.
+    product — имя продукта: его слайд смысловой (role=product).
+    prefer — запросы филлеров, для которых уже есть кадры в банке батча.
+
+    Проверка до поиска: второй смысловой слайд не должен делить главное
+    существительное с хуком («chip bag couch» и «chips bag counter») —
+    берётся его альт без общего существительного, иначе слайд становится
+    филлером. Филлеры не делят существительные со смысловыми и берутся
+    из разных семейств сцен.
     Возвращает (plans, heavy).
     """
     n = len(texts)
     heavy = is_heavy_topic(topic, texts)
-    roles = plan_roles(n) if enabled else [ROLE_SCENE] * n
+    product_index = find_product_slide(texts, product) if enabled else None
+    roles = plan_roles(n, product_index=product_index) if enabled else [ROLE_SCENE] * n
     taken: set[str] = set()
-    plans: list[SlidePhotoPlan] = []
+    used_subjects: set[str] = set()
+    semantic_queries: list[str] = []
+    plans: list[SlidePhotoPlan | None] = [None] * n
+    # 1) смысловые слайды
     for i, (text, role) in enumerate(zip(texts, roles)):
+        if role not in SEMANTIC_ROLES:
+            continue
         q, scene, alts = scene_specs[i] if i < len(scene_specs) else ("", "", [])
-        if role == ROLE_SCENE:
-            taken.add((q or "").lower())
-            plans.append(
-                SlidePhotoPlan(
-                    role=role,
-                    query=q,
-                    search_text=text,
-                    visual_scene=scene,
-                    alts=list(alts or []),
+        alts = [a for a in (alts or []) if a]
+        if enabled and role == ROLE_SCENE and i > 0 and semantic_queries:
+            chain = [c for c in [q, *alts] if c]
+            fresh = [
+                c for c in chain
+                if not any(queries_conflict(c, s) for s in semantic_queries)
+            ]
+            if not fresh:
+                print(
+                    f"[plan] слайд {i + 1}: «{q}» повторяет предмет "
+                    f"{sorted(query_subjects(q)) or sorted(query_nouns(q))} — делаю филлером"
                 )
-            )
-        else:
-            plans.append(
-                neutral_plan(
-                    role,
-                    topic=topic,
-                    slide_text=text,
-                    slide_index=i,
-                    heavy=heavy,
-                    seed=seed,
-                    taken=taken,
-                )
-            )
-    return plans, heavy
+                roles[i] = ROLE_NEUTRAL
+                continue
+            if fresh[0] != q:
+                print(f"[plan] слайд {i + 1}: «{q}» -> «{fresh[0]}» (другой предмет)")
+            q, alts = fresh[0], fresh[1:]
+        taken.add((q or "").lower())
+        semantic_queries.append(q or "")
+        alts = list(alts)
+        if enabled and not any("candid" in (x or "").split() for x in [q, *alts]):
+            cv = candid_variant(q)
+            if cv and cv.lower() != (q or "").lower():
+                alts = [cv] + alts
+        plans[i] = SlidePhotoPlan(
+            role=role,
+            query=q,
+            search_text=text,
+            visual_scene=scene,
+            alts=alts,
+        )
+    # 2) филлеры: живые запросы с предметами, которых ещё нет в карусели.
+    # Финал первым — у него самый маленький пул.
+    order = ([n - 1] if n and plans[n - 1] is None else []) + [
+        i for i in range(n - 1) if plans[i] is None
+    ]
+    for i in order:
+        text, role = texts[i], roles[i]
+        plans[i] = neutral_plan(
+            role,
+            topic=topic,
+            slide_text=text,
+            slide_index=i,
+            heavy=heavy,
+            seed=seed,
+            taken=taken,
+            used_subjects=used_subjects,
+            avoid_queries=semantic_queries,
+            prefer=prefer,
+        )
+    return [p for p in plans if p is not None], heavy
 
 
 # ---------------------------------------------------------------------------
@@ -444,6 +820,34 @@ class PhotoFeatures:
     place: str = "other"
     place_prob: float = 0.0
     fp: int | None = None
+    subject: str = "other"
+    subject_prob: float = 0.0
+    faces: int = 0
+
+
+_FACE_CASCADE = None
+
+
+def count_faces(image: Image.Image | None) -> int:
+    """Лица в кадре (Haar, как в нарезке UGC). На слайдах 2+ чужих лиц быть
+    не должно (character consistency) — правило отбора предпочитает кадры
+    без лица."""
+    global _FACE_CASCADE
+    if image is None:
+        return 0
+    try:
+        import cv2
+        import numpy as np
+
+        if _FACE_CASCADE is None:
+            _FACE_CASCADE = cv2.CascadeClassifier(
+                cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+            )
+        g = image.convert("L")
+        g.thumbnail((640, 640))
+        return int(len(_FACE_CASCADE.detectMultiScale(np.asarray(g), 1.1, 5, minSize=(28, 28))))
+    except Exception:
+        return 0
 
 
 def _softmax_best(sims: dict[str, float], temp: float) -> tuple[str, float]:
@@ -480,6 +884,7 @@ class SiglipPhotoClassifier:
         self._t_mess = None
         self._t_clean = None
         self._t_place: dict[str, Any] = {}
+        self._t_subject: dict[str, Any] = {}
         self.backend = ""
         self.cal = calibration_for(None)
 
@@ -497,6 +902,9 @@ class SiglipPhotoClassifier:
         self._t_place = {
             k: emb.embed_texts(list(v)) for k, v in PLACE_PROMPTS.items()
         }
+        self._t_subject = {
+            k: emb.embed_texts(list(v)) for k, v in SUBJECT_PROMPTS.items()
+        }
 
     def features(self, images: Sequence[Image.Image]) -> list[PhotoFeatures]:
         if not images:
@@ -508,7 +916,9 @@ class SiglipPhotoClassifier:
         vecs = emb.embed_images([im.convert("RGB") for im in images])
         out: list[PhotoFeatures] = []
         for im, v in zip(images, vecs):
-            out.append(self.features_from_vector(v, fp=image_fingerprint(im)))
+            f = self.features_from_vector(v, fp=image_fingerprint(im))
+            f.faces = count_faces(im)
+            out.append(f)
         return out
 
     def features_from_vector(self, v: Any, *, fp: int | None = None) -> PhotoFeatures:
@@ -523,13 +933,28 @@ class SiglipPhotoClassifier:
         place, prob = _softmax_best(place_sims, self.cal["place_temp"])
         if prob < self.cal["place_min_prob"]:
             place = "other"
+        subject, s_prob = self.subject_of_vector(v)
         return PhotoFeatures(
             mess=round(float(mess), 4),
             is_mess=bool(mess >= MESS_THRESHOLD),
             place=place,
             place_prob=round(float(prob), 4),
             fp=fp,
+            subject=subject,
+            subject_prob=round(float(s_prob), 4),
         )
+
+    def subject_of_vector(self, v: Any) -> tuple[str, float]:
+        """Предмет кадра; ниже SUBJECT_MIN_PROB — "other" (не ограничивается)."""
+        import numpy as np
+
+        self._ensure()
+        v = np.asarray(v, dtype=np.float32).reshape(-1)
+        sims = {k: float(np.max(t @ v)) for k, t in self._t_subject.items()}
+        subject, prob = _softmax_best(sims, SUBJECT_TEMP)
+        if prob < SUBJECT_MIN_PROB:
+            subject = "other"
+        return subject, prob
 
 
 _CLASSIFIER: SiglipPhotoClassifier | None = None
@@ -553,6 +978,8 @@ class SlideRuleResult:
     mess: float | None = None
     is_mess: bool = False
     place: str = "other"
+    subject: str = "other"
+    faces: int = 0
     series_reused: bool = False
     relaxed: list[str] = field(default_factory=list)
     swapped: bool = False
@@ -563,6 +990,8 @@ class SlideRuleResult:
             "mess_score": self.mess,
             "is_mess": self.is_mess,
             "place": self.place,
+            "subject": self.subject,
+            "faces": self.faces,
         }
         if self.series_reused:
             d["series_reused"] = True
@@ -615,24 +1044,45 @@ def enforce_carousel_rules(
     classifier: Any = None,
     refill: Callable[[int], list[Any]] | None = None,
     max_check: int = MAX_CHECK_PER_SLIDE,
+    reuse_ok: Iterable[str] = (),
 ) -> list[SlideRuleResult]:
     """
     slides[i].candidates — уже отранжированный пул (индекс 0 = текущий выбор).
     Переставляет в [0] первый кандидат, который проходит правила.
     Если никто не проходит — правила ослабляются по очереди
-    (место → повтор в серии → лимит грязи), но грязь на последнем слайде
-    не пропускается никогда, пока есть хоть один чистый кадр.
+    (место → повтор в серии → [дозапрос филлера] → предмет → лимит грязи),
+    но грязь на последнем слайде не пропускается никогда, пока есть хоть
+    один чистый кадр.
+
+    Порядок выбора: смысловые слайды (хук, продукт, сцена) → финал →
+    филлеры, чтобы уступал филлер, а не хук. Слайд с продуктом не считается
+    в лимите предмета. reuse_ok — pin из банка филлеров батча: на филлер-
+    слайде такой кадр можно повторить из другой карусели (лимит повторов
+    держит сам банк).
     """
     n = len(slides)
     classifier = classifier or get_photo_classifier()
     used = used or UsedIndex()
     mess_budget = MAX_MESS_HEAVY if heavy else MAX_MESS_NORMAL
+    reuse_pins = {str(p) for p in reuse_ok if p}
     results: list[SlideRuleResult | None] = [None] * n
     place_count: Counter[str] = Counter()
+    subject_count: Counter[str] = Counter()
     mess_used = 0
     chosen_fps: list[int] = []
     last = n - 1
-    order = ([last] if n > 0 else []) + list(range(0, max(0, n - 1)))
+
+    def _role(j: int) -> str:
+        return roles[j] if j < len(roles) else ROLE_SCENE
+
+    semantic = [j for j in range(n) if j != last and _role(j) in SEMANTIC_ROLES]
+    fillers = [j for j in range(n) if j != last and j not in semantic]
+    order = semantic + ([last] if n > 0 else []) + fillers
+    strict_tiers = (("prefer_free",), (), ("place",), ("place", "series"))
+    relax_tiers = (
+        ("place", "series", "faces"),
+        ("place", "series", "faces", "mess_budget"),
+    )
 
     # Кадры, которые у какого-то слайда единственные: другим слайдам их не отдаём
     sole_fp: dict[int, int] = {}
@@ -645,26 +1095,38 @@ def enforce_carousel_rules(
 
     for i in order:
         slide = slides[i]
-        role = roles[i] if i < len(roles) else ROLE_SCENE
+        role = _role(i)
         is_final = i == last and n > 1
+        filler = role in FILLER_ROLES
+        subject_applies = role != ROLE_PRODUCT
+        faces_banned = i > 0  # хук может показать героиню, дальше — без чужих лиц
         cands = list(getattr(slide, "candidates", []) or [])
         if not cands:
             results[i] = SlideRuleResult(photo_role=role, relaxed=["empty"])
             continue
 
-        def evaluate(pool: list[Any]) -> tuple[int, list[str]] | None:
+        def evaluate(pool: list[Any], tiers) -> tuple[int, list[str]] | None:
+            """
+            Первый кадр, прошедший правила ступени (ref). Если его предмет уже
+            есть в карусели — берётся следующий прошедший кадр другого
+            предмета, но только не менее живой (LIVE_MARGIN); иначе ref с
+            пометкой «subject». Предмет не вызывает дозапрос: дозапрос
+            медленный и даёт кадры хуже.
+            """
             head = pool[: max(1, max_check)]
             # Лениво: обычно хватает 1–2 кадров, остальные оцениваем по надобности
             _prefetch(head[:2], classifier)
             reserved = [fp for j, fp in sole_fp.items() if j != i]
-            tiers = (
-                ("prefer_free",),
-                (),
-                ("place",),
-                ("place", "series"),
-                ("place", "series", "mess_budget"),
-            )
+
+            def subject_free(f: PhotoFeatures) -> bool:
+                return (
+                    not subject_applies
+                    or f.subject == "other"
+                    or subject_count[f.subject] < MAX_SAME_SUBJECT
+                )
+
             for relaxed in tiers:
+                ref: tuple[int, Any] | None = None
                 for idx, c in enumerate(head):
                     f = _cand_features(c, classifier)
                     if f.fp is not None and fp_matches(f.fp, chosen_fps):
@@ -673,9 +1135,15 @@ def enforce_carousel_rules(
                         continue
                     if is_final and f.is_mess:
                         continue  # никогда не ослабляется
+                    if faces_banned and "faces" not in relaxed and f.faces > 0:
+                        continue
                     if "mess_budget" not in relaxed and f.is_mess and mess_used >= mess_budget:
                         continue
-                    if "series" not in relaxed and used.is_used(getattr(c, "pin_id", None), f.fp):
+                    if (
+                        "series" not in relaxed
+                        and not (filler and str(getattr(c, "pin_id", "")) in reuse_pins)
+                        and used.is_used(getattr(c, "pin_id", None), f.fp)
+                    ):
                         continue
                     if (
                         "place" not in relaxed
@@ -683,10 +1151,19 @@ def enforce_carousel_rules(
                         and place_count[f.place] >= MAX_SAME_PLACE
                     ):
                         continue
-                    return idx, [r for r in relaxed if r != "prefer_free"]
+                    if ref is None:
+                        ref = (idx, c)
+                    if subject_free(f):
+                        ref_live, live = _live(ref[1]), _live(c)
+                        if idx == ref[0] or ref_live is None or live is None or (
+                            live >= ref_live - LIVE_MARGIN
+                        ):
+                            return idx, [r for r in relaxed if r != "prefer_free"]
+                if ref is not None:
+                    return ref[0], [r for r in relaxed if r != "prefer_free"] + ["subject"]
             return None
 
-        picked = evaluate(cands)
+        picked = evaluate(cands, strict_tiers)
         if picked is None and refill is not None:
             try:
                 extra = list(refill(i) or [])
@@ -695,7 +1172,9 @@ def enforce_carousel_rules(
                 extra = []
             if extra:
                 cands = cands + extra
-                picked = evaluate(cands)
+                picked = evaluate(cands, strict_tiers)
+        if picked is None:
+            picked = evaluate(cands, relax_tiers)
         relaxed: list[str]
         if picked is None:
             idx, relaxed = 0, ["all"]
@@ -720,11 +1199,15 @@ def enforce_carousel_rules(
             mess_used += 1
         if f.place in LIMITED_PLACES:
             place_count[f.place] += 1
+        if subject_applies and f.subject != "other":
+            subject_count[f.subject] += 1
         res = SlideRuleResult(
             photo_role=role,
             mess=f.mess,
             is_mess=f.is_mess,
             place=f.place,
+            subject=f.subject,
+            faces=f.faces,
             series_reused=used.is_used(getattr(chosen, "pin_id", None), f.fp),
             relaxed=relaxed,
             swapped=idx != 0,
@@ -732,7 +1215,7 @@ def enforce_carousel_rules(
         if idx != 0 or relaxed:
             print(
                 f"[rules] слайд {i + 1} ({role}): кадр #{idx} "
-                f"mess={f.mess:.2f} place={f.place}"
+                f"mess={f.mess:.2f} place={f.place} subject={f.subject}"
                 + (f" ослаблено={relaxed}" if relaxed else "")
             )
         results[i] = res

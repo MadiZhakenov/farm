@@ -1594,7 +1594,7 @@ class CarouselFactoryApp:
         # Роли: 1-й по сценарию, середина чередуется с нейтральными, финал приятный
         plans, heavy = build_photo_plans(
             lines, scene_specs, topic=topic_ui, seed=time.time_ns(),
-            enabled=RULES_ENABLED,
+            enabled=RULES_ENABLED, product=self._product_value(),
         )
         roles = [p.role for p in plans]
 
@@ -1602,7 +1602,9 @@ class CarouselFactoryApp:
             for i, text in enumerate(lines):
                 plan = plans[i]
                 query = plan.query
-                search_text = plan.search_text if plan.role != "scene" else text
+                search_text = (
+                    text if plan.role in ("scene", "product") else plan.search_text
+                )
                 self._set_status(
                     f"Слайд {i + 1}/{len(lines)} · запрос: {query}"
                 )

@@ -59,12 +59,16 @@ def make_img(seed: int, size=(240, 320)) -> Image.Image:
 
 
 class Cand:
-    def __init__(self, pin, *, mess=0.1, place="other", seed=None, title=""):
+    def __init__(self, pin, *, mess=0.1, place="other", seed=None, title="", subject="other", ugc=None, faces=0):
         self.pin_id = str(pin)
         self.title = title
         self.image = make_img(seed if seed is not None else hash(pin) % 10_000)
         self._mess = mess
         self._place = place
+        self._subject = subject
+        self._faces = faces
+        if ugc is not None:
+            self.ugc_score, self.ugc_scored = float(ugc), True
 
 
 class FakeClassifier:
@@ -89,6 +93,9 @@ class CandClassifier:
                     place=c._place,
                     place_prob=0.9,
                     fp=image_fingerprint(im),
+                    subject=c._subject,
+                    subject_prob=0.9 if c._subject != "other" else 0.0,
+                    faces=c._faces,
                 )
             )
         return out
@@ -115,6 +122,7 @@ def run_rules(slides, roles=None, **kw):
 
 @pytest.mark.parametrize("n", [6, 7, 8, 9])
 def test_roles_first_scene_last_final_middle_alternates(n):
+    # сцена / филлер по очереди: сценные слайды дают живые бытовые кадры
     roles = plan_roles(n)
     assert roles[0] == "scene"
     assert roles[-1] == "final"
@@ -126,6 +134,22 @@ def test_roles_first_scene_last_final_middle_alternates(n):
 
 def test_roles_six_slides_exact():
     assert plan_roles(6) == ["scene", "scene", "neutral", "scene", "neutral", "final"]
+    assert plan_roles(3) == ["scene", "scene", "final"]
+
+
+def test_roles_product_slide_is_semantic():
+    roles = plan_roles(8, product_index=4)
+    assert roles == ["scene", "scene", "neutral", "scene", "product", "scene", "neutral", "final"]
+
+
+def test_product_name_from_free_text_field():
+    assert cr.product_names("Приложение FocusFlow: лимит 3 задачи в день") == ["focusflow"]
+    assert cr.product_names("cozy home app — coloring") == ["cozy home"]
+    texts = ["hook", "line", "I opened Cozy Home and colored for 20 min", "x", "save this"]
+    assert cr.find_product_slide(texts, "Cozy Home") == 2
+    assert cr.find_product_slide(texts, "") is None
+    # продукт на хуке / финале не делает их «продуктом»
+    assert cr.find_product_slide(["Cozy Home saved me", "a", "b"], "Cozy Home") is None
 
 
 def test_neutral_and_final_queries_are_clean_and_survive_cleaner():
@@ -151,12 +175,14 @@ def test_build_plans_food_topic():
         "Stop shrinking yourself during the day",
         "Save this for the next time you feel guilty for being hungry",
     ]
-    specs = [(f"open pantry night {i}", "pantry scene", []) for i in range(6)]
+    props = ["open pantry night", "lunch salad desk", "tea mug bed",
+             "calorie app phone", "lunch box office", "tea mug bed"]
+    specs = [(props[i], "scene", []) for i in range(6)]
     plans, heavy = build_photo_plans(texts, specs, topic="night binge after eating clean", seed=1)
     assert not heavy
     assert [p.role for p in plans] == plan_roles(6)
     # сценарные слайды сохраняют свой запрос и настоящий текст для поиска
-    assert plans[0].query == "open pantry night 0" and plans[0].search_text == texts[0]
+    assert plans[0].query == "open pantry night" and plans[0].search_text == texts[0]
     queries = [p.query for p in plans]
     assert len(set(queries)) == len(queries), "запросы в карусели не повторяются"
     for p in plans:
@@ -506,3 +532,267 @@ def test_mixed_topic_list_has_no_category():
     from core.niches import dominant_category
 
     assert dominant_category(["gym motivation", "skincare at night", "procrastinating work", "dating anxiety"]) is None
+
+
+# ---------------------------------------------------------------------------
+# Фидбек 2026-10-02: смысловые / филлеры, один предмет на карусель
+# ---------------------------------------------------------------------------
+
+
+def test_query_nouns_and_conflicts():
+    assert cr.queries_conflict("chip bag couch night", "chips bag counter candid")
+    assert cr.queries_conflict("coffee mug desk", "hands holding coffee cup")
+    assert not cr.queries_conflict("open pantry night", "street night walk")
+    assert "chip" in cr.query_nouns("crisps on couch")
+
+
+def test_second_semantic_slide_sharing_hook_noun_takes_alt_or_becomes_filler():
+    texts = ["hook", "a", "b", "c", "d", "save"]
+    specs = [("chip bag couch night", "", [])] + [("x", "", [])] * 5
+    # середина (индекс 3) тянет те же чипсы, но есть альт без них
+    specs[3] = ("chips bag counter candid", "", ["dinner plate table"])
+    plans, _ = build_photo_plans(texts, specs, topic="snacks", seed=3)
+    assert plans[3].role == "scene" and plans[3].query == "dinner plate table"
+    # альта нет — слайд становится филлером
+    specs[3] = ("chips bag counter candid", "", ["crisps on couch"])
+    plans, _ = build_photo_plans(texts, specs, topic="snacks", seed=3)
+    assert plans[3].role == "neutral"
+
+
+def test_fillers_are_live_and_take_distinct_subjects():
+    texts = ["hook"] + ["line"] * 8 + ["save"]
+    specs = [("coffee mug desk morning", "", [])] + [("x", "", [])] * 9
+    for seed in range(15):
+        for topic in (f"tired at work {seed}", f"snack binge food {seed}", f"breakup grief {seed}"):
+            plans, _ = build_photo_plans(texts, specs, topic=topic, seed=seed)
+            fillers = [p for p in plans if p.role in ("neutral", "final")]
+            subj = [cr.query_subject(p.query) for p in fillers]
+            assert len(subj) == len(set(subj)), f"{topic}: предметы повторяются {[p.query for p in fillers]}"
+            for p in fillers:
+                assert cr.filler_liveness(p.query) >= cr.FILLER_LIVE_MIN, p.query
+                assert not cr.queries_conflict(p.query, "coffee mug desk morning"), p.query
+
+
+def test_query_subjects_map():
+    assert cr.query_subjects("hands holding coffee cup") == {"drink"}
+    assert cr.query_subject("bus window night city") == "car"
+    assert cr.query_subject("sky clouds window") == "sky"
+    assert cr.query_subjects("chip bag couch night") == {"snacks", "room"}
+    assert "kitchen" in cr.query_subjects("standing kitchen counter night")
+    # «counting» — не предмет: разные предметы не конфликтуют
+    assert not cr.queries_conflict("counting almonds handful desk", "counting kitchen counter night")
+    assert cr.queries_conflict("standing kitchen counter night", "kitchen counter night plate")
+
+
+def test_same_subject_max_one_per_carousel_filler_yields():
+    # хук — чипсы; у филлера первыми тоже чипсы, глубже — окно
+    slides = [
+        Slide([Cand("hook-chips", subject="snacks")]),
+        Slide([Cand("f-chips", subject="snacks"), Cand("f-window", subject="window")]),
+        Slide([Cand("fin", subject="drink")]),
+    ]
+    res = run_rules(slides, roles=["scene", "neutral", "final"])
+    assert slides[0].candidates[0].pin_id == "hook-chips"
+    assert slides[1].candidates[0].pin_id == "f-window"
+    assert [r.subject for r in res] == ["snacks", "window", "drink"]
+
+
+def test_product_slide_not_limited_by_subject():
+    slides = [
+        Slide([Cand("hook-tablet", subject="desk")]),
+        Slide([Cand("prod-tablet", subject="desk"), Cand("prod-other", subject="room")]),
+        Slide([Cand("fin", subject="drink")]),
+    ]
+    run_rules(slides, roles=["scene", "product", "final"])
+    assert slides[1].candidates[0].pin_id == "prod-tablet"
+
+
+def test_subject_never_triggers_slow_refill():
+    calls = []
+
+    def refill(i):
+        calls.append(i)
+        return [Cand("refill-sky", subject="sky")]
+
+    slides = [
+        Slide([Cand("hook-road", subject="road")]),
+        Slide([Cand("f-road", subject="road")]),
+        Slide([Cand("fin", subject="drink")]),
+    ]
+    res = run_rules(slides, roles=["scene", "neutral", "final"], refill=refill)
+    # дозапрос медленный и даёт кадры хуже: из-за предмета его не делаем
+    assert calls == []
+    assert slides[1].candidates[0].pin_id == "f-road"
+    assert "subject" in res[1].relaxed
+
+
+def test_subject_swap_never_costs_liveness():
+    # другой предмет заметно менее живой — оставляем повтор
+    slides = [
+        Slide([Cand("hook-chips", subject="snacks", ugc=0.70)]),
+        Slide([Cand("f-chips", subject="snacks", ugc=0.68), Cand("f-stock", subject="window", ugc=0.40)]),
+        Slide([Cand("fin", subject="drink", ugc=0.6)]),
+    ]
+    res = run_rules(slides, roles=["scene", "neutral", "final"])
+    assert slides[1].candidates[0].pin_id == "f-chips"
+    assert "subject" in res[1].relaxed
+    # почти такой же живой — меняем
+    slides = [
+        Slide([Cand("hook-chips", subject="snacks", ugc=0.70)]),
+        Slide([Cand("f-chips", subject="snacks", ugc=0.68), Cand("f-window", subject="window", ugc=0.65)]),
+        Slide([Cand("fin", subject="drink", ugc=0.6)]),
+    ]
+    run_rules(slides, roles=["scene", "neutral", "final"])
+    assert slides[1].candidates[0].pin_id == "f-window"
+
+
+def test_subject_relaxed_only_when_nothing_else():
+    slides = [
+        Slide([Cand("hook-road", subject="road")]),
+        Slide([Cand("f-road", subject="road")]),
+        Slide([Cand("fin", subject="drink")]),
+    ]
+    res = run_rules(slides, roles=["scene", "neutral", "final"])
+    assert slides[1].candidates[0].pin_id == "f-road"
+    assert "subject" in res[1].relaxed
+
+
+def test_bank_filler_may_repeat_series_photo_but_semantic_may_not():
+    old = Cand("old-pin", seed=777)
+    used = UsedIndex()
+    used.add("old-pin", image_fingerprint(old.image))
+    fresh = Cand("fresh", seed=778)
+    # филлер: pin из банка батча — повтор разрешён
+    slides = [Slide([Cand("hook", seed=1)]), Slide([old, fresh]), Slide([Cand("fin", seed=3)])]
+    run_rules(slides, roles=["scene", "neutral", "final"], used=used, reuse_ok={"old-pin"})
+    assert slides[1].candidates[0].pin_id == "old-pin"
+    # смысловой слайд: тот же pin занят в серии — берём свежий
+    old2 = Cand("old-pin", seed=777)
+    slides = [Slide([Cand("hook", seed=1)]), Slide([old2, Cand("fresh2", seed=779)]), Slide([Cand("fin", seed=3)])]
+    run_rules(slides, roles=["scene", "scene", "final"], used=used, reuse_ok={"old-pin"})
+    assert slides[1].candidates[0].pin_id == "fresh2"
+
+
+def test_filler_bank_reuse_cap_and_isolation():
+    from core.filler_bank import FillerBank
+
+    bank = FillerBank(max_reuse=2, min_serve=2)
+    cands = [Cand(f"p{k}", seed=500 + k) for k in range(3)]
+    assert bank.add("tea mug windowsill", cands) == 3
+    assert bank.can_serve("tea mug windowsill")
+    got = bank.take("tea mug windowsill")
+    assert [c.pin_id for c in got] == ["p0", "p1", "p2"]
+    # копии: закрытие картинки карусели не портит банк
+    got[0].image.close()
+    assert bank.take("tea mug windowsill")[0].image.size == cands[0].image.size
+    bank.mark_used(["p0", "p0", "p1", "p1"])
+    left = [c.pin_id for c in bank.available("tea mug windowsill")]
+    assert left == ["p2"] and not bank.can_serve("tea mug windowsill")
+    assert bank.known_pins() == {"p0", "p1", "p2"}
+
+
+def test_wide_assign_soft_subject_penalty():
+    import numpy as np
+    from core import harvester as hv
+
+    def mk(pid, rank):
+        c = hv.CandidateImage(pin_id=pid, title="", source_url="", query="q", image=None)
+        c._wide_rank = rank
+        c.text_relevance = 0.9
+        return c
+
+    # слайд 0: чипсы (1.0); слайд 1: чипсы (0.9) или окно (0.6, та же ступень)
+    eligible = [[mk("chips-a", 8.9)], [mk("chips-b", 8.8), mk("window", 8.5)]]
+    rng = np.random.default_rng(0)
+    vec_of = {}
+    for pid in ("chips-a", "chips-b", "window"):
+        v = rng.normal(size=16).astype(np.float32)
+        vec_of[pid] = v / np.linalg.norm(v)
+    subjects = {"chips-a": "snacks", "chips-b": "snacks", "window": "window"}
+    out = hv._wide_assign(eligible, vec_of, limit=3, subjects=subjects)
+    assert out[1][0].pin_id == "window"
+    # без меток — берётся лучший по рангу
+    out = hv._wide_assign(eligible, vec_of, limit=3)
+    assert out[1][0].pin_id == "chips-b"
+    # слайд-продукт не штрафуется
+    out = hv._wide_assign(eligible, vec_of, limit=3, subjects=subjects, exempt={1})
+    assert out[1][0].pin_id == "chips-b"
+    # штраф не опускает на ступень ниже: окно ступени B (6.x) не берём
+    eligible2 = [[mk("chips-a", 8.9)], [mk("chips-b", 8.8), mk("window", 6.9)]]
+    out = hv._wide_assign(eligible2, vec_of, limit=3, subjects=subjects)
+    assert out[1][0].pin_id == "chips-b"
+    # и не ценой живости: окно заметно менее живое — остаются чипсы
+    b, w = mk("chips-b", 8.8), mk("window", 8.5)
+    b.ugc_score, b.ugc_scored = 0.70, True
+    w.ugc_score, w.ugc_scored = 0.40, True
+    out = hv._wide_assign([[mk("chips-a", 8.9)], [b, w]], vec_of, limit=3, subjects=subjects)
+    assert out[1][0].pin_id == "chips-b"
+
+
+def test_hook_keeps_relationship_query():
+    from core.query_forge import own_slide_queries
+
+    dna = {"gender": "female", "hair": "long brown hair"}
+    q, _ = own_slide_queries(slide_text="my mom said I was too thin",
+                             visual_scene="mom daughter kitchen", topic="food guilt",
+                             slide_index=0, draft_query="mom daughter kitchen",
+                             character_dna=dna, max_alts=1)
+    assert q == "mom daughter kitchen"
+    q2, _ = own_slide_queries(slide_text="my dad asks if I ate", visual_scene="father daughter cafe",
+                              topic="food", slide_index=0, draft_query="father daughter cafe",
+                              character_dna=dna, max_alts=1)
+    assert q2 == "father daughter cafe"
+
+
+def test_prompt_has_hook_photo_rule():
+    from core.llm_engine import build_system_prompt
+
+    prompt = build_system_prompt([])
+    assert "HOOK PHOTO (slide 1)" in prompt
+    assert "father daughter cafe" in prompt
+
+
+def test_filler_bank_query_cap_rotates_scenes():
+    from core.filler_bank import FillerBank
+
+    bank = FillerBank(max_reuse=10, min_serve=1, max_query_reuse=2)
+    bank.add("ocean waves beach", [Cand(f"o{k}", seed=600 + k) for k in range(5)])
+    bank.add("record player vinyl", [Cand(f"v{k}", seed=700 + k) for k in range(5)])
+    assert bank.take("ocean waves beach") and bank.take("ocean waves beach")
+    # запрос взят в 2 карусели — больше не предлагается, реже взятые — первыми
+    assert not bank.take("ocean waves beach")
+    assert bank.ready_queries() == ["record player vinyl"]
+
+
+
+def test_filler_bank_queries_are_measured_live_and_survive_cleaner():
+    pools = cr.NEUTRAL_LIGHT + cr.NEUTRAL_FOOD + cr.NEUTRAL_MOODY + cr.FINAL_PLEASANT + cr.FINAL_CALM
+    for q in set(pools):
+        assert cr.filler_liveness(q) >= cr.FILLER_LIVE_MIN, q
+    # стоковые прежние филлеры в пулы не вернулись
+    for q in ("flowers vase table", "sheer curtains bedroom window", "sunset city skyline"):
+        assert q not in pools
+
+
+def test_faces_skipped_after_hook_but_allowed_on_hook():
+    slides = [
+        Slide([Cand("hook-face", faces=1), Cand("hook-noface")]),
+        Slide([Cand("f-face", faces=2), Cand("f-noface")]),
+        Slide([Cand("fin-face", faces=1)]),
+    ]
+    res = run_rules(slides, roles=["scene", "neutral", "final"])
+    assert slides[0].candidates[0].pin_id == "hook-face"
+    assert slides[1].candidates[0].pin_id == "f-noface"
+    # заменить нечем — лицо остаётся, с пометкой
+    assert slides[2].candidates[0].pin_id == "fin-face"
+    assert "faces" in res[2].relaxed
+
+
+def test_scene_slides_get_candid_variant():
+    texts = ["hook", "a", "b", "c", "d", "save"]
+    specs = [("standing kitchen counter night", "", []), ("pasta plate", "", []),
+             ("x", "", []), ("gym bag floor hallway", "", []), ("x", "", []), ("x", "", [])]
+    plans, _ = build_photo_plans(texts, specs, topic="food", seed=1)
+    assert "standing kitchen counter candid" in plans[0].alts
+    assert cr.candid_variant("chip bag couch night aesthetic") == "chip bag couch candid"
+    assert cr.candid_variant("x") == ""

@@ -599,6 +599,21 @@ def _clamp(words: Iterable[str], *, max_w: int = 4) -> str:
     return " ".join(out[:max_w])
 
 
+# Хук: люди и отношения на фото — «подтекст», который останавливает скролл
+# (папа с дочкой, пара, мама на кухне). Такой запрос хука не заменяем
+# пропом сцены. Цвет волос / girl / guy по-прежнему запрещены (DNA-lock).
+_RELATIONSHIP_RE = re.compile(
+    r"\b(father|dad|daddy|mother|mom|mum|daughter|son|parents?|couple|"
+    r"boyfriend|girlfriend|husband|wife|ex|best\s+friends?|friends|sisters?|"
+    r"brothers?|grandma|grandpa|grandmother|grandfather|family|siblings?)\b",
+    re.I,
+)
+
+
+def query_names_relationship(query: str) -> bool:
+    return bool(_RELATIONSHIP_RE.search(query or ""))
+
+
 def forge_pinterest_query(
     *,
     slide_text: str = "",
@@ -616,7 +631,6 @@ def forge_pinterest_query(
       3. props extracted from slide_text / topic
       4. last-resort indoor candid with valence place
     """
-    del slide_index  # reserved for future hook/body branching
     text = (slide_text or "").strip()
     scene = scrub_dna_from_scene(visual_scene or "")
     draft = re.sub(r"\s+", " ", (draft_query or "").strip())
@@ -624,6 +638,17 @@ def forge_pinterest_query(
 
     def _out(q: str) -> str:
         return normalize_pinterest_query_aliases(q)
+
+    # 0) Хук с людьми / отношениями — оставляем как есть (подтекст хука)
+    if (
+        int(slide_index) == 0
+        and draft
+        and query_names_relationship(draft)
+        and not query_is_dna_cast(draft)
+    ):
+        toks = _words(re.sub(r"\s+", " ", _DNA_CAST_RE.sub(" ", draft)).strip())
+        if len(toks) >= 2:
+            return _out(_clamp(toks, max_w=4))
 
     # 1) Keep a good draft — but NEVER if it misses the slide's strongest prop
     # Prefer scene props; topic must not overwrite a sky/fridge scene with "window"
@@ -820,7 +845,9 @@ def own_slide_query(
         q = normalize_pinterest_query_aliases(q)
 
     # Hard prop-lock: primary must name the strongest visual_scene/text prop
-    if query_misses_slide_prop(
+    # (кроме хука с людьми / отношениями — там главное люди, а не проп)
+    hook_people = int(slide_index) == 0 and query_names_relationship(q)
+    if not hook_people and query_misses_slide_prop(
         q, slide_text=slide_text, visual_scene=scene, topic=topic
     ):
         props = (

@@ -118,9 +118,10 @@ class FakeHarvester:
 
     def harvest_slides_parallel(self, specs, **kw):
         self.specs = list(specs)
+        self.roles = list(kw.get("roles") or [])
         self.n += 1
         out = []
-        last = len(specs) - 1
+        last = 5  # FOOD_TEXTS / OFF_TEXTS — по 6 слайдов
         for q, text, idx, scene, alts in specs:
             base = self.n * 1000 + idx * 20
             if idx == last:
@@ -175,7 +176,10 @@ def test_build_one_carousel_applies_all_rules(env):
     )
     meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
     roles = [s["photo_role"] for s in meta["slides"]]
-    assert roles == cr.plan_roles(6) == meta["photo_roles"]
+    assert roles == meta["photo_roles"] == harv.roles
+    # у FakeLLM все запросы «open pantry night»: второй смысловой слайд
+    # делит существительное с хуком -> филлер; смысловой только хук
+    assert roles == ["scene", "neutral", "neutral", "neutral", "neutral", "final"]
 
     # 1) нейтральные/финальный слайды искали нейтральное, а рисуют настоящий текст
     for i, spec in enumerate(harv.specs):
@@ -226,9 +230,19 @@ def test_run_batch_skips_off_category_and_keeps_series_unique(env, monkeypatch):
     manifest = json.loads((res.run_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["category"] == "food" and manifest["skipped_off_category"] == 1
 
-    # одно фото — одна карусель: pin_id финалов не повторяются между каруселями
-    pins = []
+    # смысловые фото — одна карусель на серию; филлеры из банка батча можно
+    # повторить (не больше MAX_REUSE каруселей), но не дважды в одной
+    from core.filler_bank import MAX_REUSE
+
+    semantic, filler = [], []
     for meta_path in sorted(res.run_dir.glob("carousel_*/meta.json")):
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        pins += [s["pin_id"] for s in meta["slides"]]
-    assert len(pins) == len(set(pins)) == 18
+        own = [s["pin_id"] for s in meta["slides"]]
+        assert len(own) == len(set(own)), "внутри карусели фото не повторяется"
+        for s in meta["slides"]:
+            (filler if s["photo_role"] in ("neutral", "final") else semantic).append(s["pin_id"])
+    assert len(semantic) + len(filler) == 18
+    assert len(semantic) == len(set(semantic))
+    from collections import Counter
+
+    assert max(Counter(filler).values()) <= MAX_REUSE

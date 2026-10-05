@@ -20,13 +20,17 @@ from PIL import Image
 
 from core.caption_engine import generate_caption
 from core.carousel_rules import (
+    FILLER_ROLES,
     RULES_ENABLED,
+    SEMANTIC_ROLES,
     UsedIndex,
     build_photo_plans,
     enforce_carousel_rules,
     image_fingerprint,
     neutral_plan,
+    query_subjects,
 )
+from core.filler_bank import FillerBank
 from core.color_matcher import get_color_profile, get_harmony_score
 from core.harvester import (
     CandidateImage,
@@ -265,6 +269,7 @@ def build_one_carousel(
     batch_memory: dict[str, list[str]] | None = None,
     used_index: UsedIndex | None = None,
     category: str | None = None,
+    filler_bank: FillerBank | None = None,
 ) -> Path:
     def status(msg: str) -> None:
         if on_status:
@@ -366,25 +371,35 @@ def build_one_carousel(
         )
         scene_specs.append((primary, scene, list(alts)))
 
-    # Роли слайдов: 1-й по сценарию, середина чередуется со спокойными
-    # нейтральными кадрами, последний — всегда приятный (фидбек 2026-09-29)
+    # Роли слайдов (фидбек 2026-10-02): смысловые — хук и слайд с продуктом
+    # (без продукта — один в середине), остальное — филлеры из разных
+    # семейств сцен; последний — всегда приятный. Филлеры, для которых в
+    # банке батча уже есть кадры, в Pinterest не идут.
     plans, heavy = build_photo_plans(
         texts,
         scene_specs,
         topic=topic,
         seed=f"{index}:{variation_index}",
         enabled=RULES_ENABLED,
+        product=product,
     )
     roles = [p.role for p in plans]
     # (query, text, idx, scene, alt_queries) — text здесь только для поиска
     specs: list[tuple] = []
+    bank_cands: dict[int, list] = {}
     for i, plan in enumerate(plans):
         specs.append((plan.query, plan.search_text, i, plan.visual_scene, plan.alts))
+        if filler_bank is not None and plan.role in FILLER_ROLES:
+            got = filler_bank.take(plan.query)
+            if got:
+                bank_cands[i] = got
         print(
             f"[query-owner] slide {i + 1} [{plan.role}]: {plan.query!r}"
-            + (f" +alts={plan.alts}" if plan.alts else ""),
+            + (f" +alts={plan.alts}" if plan.alts else "")
+            + (f" · из банка ({len(bank_cands[i])})" if i in bank_cands else ""),
             flush=True,
         )
+    live = [i for i in range(len(specs)) if i not in bank_cands]
     if heavy:
         print("[rules] тяжёлая тема: в середине можно темнее, финал спокойный")
 
@@ -401,15 +416,29 @@ def build_one_carousel(
         _pinterest_preflight(harvester)
 
     harvester.reset_timing()
-    harvested = harvester.harvest_slides_parallel(
-        specs,
-        limit=CANDIDATES,
-        min_keep=max(1, MIN_KEEP),
-        topic=topic,
-        max_attempts=1,
-        max_workers=3,
-        character_dna=character_dna,
+    harvested_live = (
+        harvester.harvest_slides_parallel(
+            [specs[i] for i in live],
+            limit=CANDIDATES,
+            min_keep=max(1, MIN_KEEP),
+            topic=topic,
+            max_attempts=1,
+            max_workers=3,
+            character_dna=character_dna,
+            roles=[roles[i] for i in live],
+        )
+        if live
+        else []
     )
+    harvested: list[Any] = [None] * len(specs)
+    for i, res in zip(live, harvested_live):
+        harvested[i] = res
+        if filler_bank is not None and roles[i] in FILLER_ROLES and res[0]:
+            # в банк — только кадры, найденные запросом этого филлера
+            own = [c for c in res[0] if getattr(c, "_wide_own", True)]
+            filler_bank.add(plans[i].query, own[:CANDIDATES])
+    for i, cands in bank_cands.items():
+        harvested[i] = (cands[:CANDIDATES], None, plans[i].query)
     print(
         f"[TIMER] 2. Поиск и фильтрация в Pinterest (все слайды): "
         f"{float(harvester.timing_pinterest_sec):.1f} с"
@@ -441,10 +470,15 @@ def build_one_carousel(
         t_rules = time.perf_counter()
 
         def _refill(slide_i: int) -> list:
-            """Для финала/нейтрального слайда: ещё один чистый запрос."""
-            if roles[slide_i] == "scene":
+            """Для финала/нейтрального слайда: ещё один чистый запрос
+            другого семейства (сначала — из банка филлеров)."""
+            if roles[slide_i] in SEMANTIC_ROLES:
                 return []
             taken = {str(sp[0]).lower() for sp in specs}
+            subjects: set[str] = set()
+            for k, p in enumerate(plans):
+                if k != slide_i:
+                    subjects |= query_subjects(p.query)
             extra_plan = neutral_plan(
                 roles[slide_i],
                 topic=topic,
@@ -453,8 +487,14 @@ def build_one_carousel(
                 heavy=heavy,
                 seed=f"refill:{index}:{variation_index}",
                 taken=taken,
+                used_subjects=subjects,
             )
             print(f"[rules] слайд {slide_i + 1}: дозапрос «{extra_plan.query}»")
+            if filler_bank is not None:
+                got = filler_bank.take(extra_plan.query)
+                if got:
+                    print(f"[rules] слайд {slide_i + 1}: дозапрос из банка ({len(got)})")
+                    return got
             more, _p, _q = harvester.harvest_until_filled(
                 extra_plan.query,
                 slide_text=extra_plan.search_text,
@@ -473,6 +513,8 @@ def build_one_carousel(
                 more, _dropped = apply_gender_lock_filter(
                     more, gender, slide_index=slide_i, query=extra_plan.query
                 )
+            if filler_bank is not None and more:
+                filler_bank.add(extra_plan.query, more[:CANDIDATES])
             return more
 
         rule_results = enforce_carousel_rules(
@@ -481,6 +523,7 @@ def build_one_carousel(
             heavy=heavy,
             used=used_index,
             refill=_refill,
+            reuse_ok=filler_bank.known_pins() if filler_bank is not None else (),
         )
         _timer("3b. Правила карусели", t_rules)
 
@@ -630,6 +673,13 @@ def build_one_carousel(
 
     # Только pin_id реально пошедших на финальный JPEG (selected=0).
     # Отвергнутые alts / сырой пул в used_pins_run НЕ попадают.
+    # Банк филлеров: кадр-филлер идёт не больше чем в MAX_REUSE каруселей
+    if filler_bank is not None:
+        filler_bank.mark_used(
+            str(s.candidates[s.selected].pin_id or "")
+            for k, s in enumerate(batch_slides)
+            if s.candidates and roles[k] in FILLER_ROLES
+        )
     if used_pins_run is not None and selected_pins:
         used_pins_run.update(selected_pins)
         harvester.mark_used(selected_pins)
@@ -775,6 +825,8 @@ def run_batch(
 
     batch_memory = new_batch_memory()
     harvester.reset_used()
+    # Банк филлеров на весь батч (фидбек 2026-10-02)
+    filler_bank = FillerBank()
 
     topic_list = [t.strip() for t in (topics or []) if t and str(t).strip()]
     multi = len(topic_list) > 1
@@ -851,6 +903,7 @@ def run_batch(
                     batch_memory=batch_memory,
                     used_index=used_index,
                     category=category,
+                    filler_bank=filler_bank,
                 )
             except OffCategoryError as off:
                 if multi:
@@ -873,6 +926,7 @@ def run_batch(
                     batch_memory=batch_memory,
                     used_index=used_index,
                     category=category,
+                    filler_bank=filler_bank,
                 )
             # Track DNA so the next carousel picks a different look
             try:
@@ -999,6 +1053,7 @@ def run_batch(
                     batch_memory=batch_memory,
                     used_index=used_index,
                     category=category,
+                    filler_bank=filler_bank,
                 )
                 result.made += 1
                 result.failed = max(0, result.failed - 1)
@@ -1039,6 +1094,7 @@ def run_batch(
                 f"still fail {len(still_failed)}"
             )
 
+    print(f"[filler-bank] {filler_bank.stats()}")
     usage = meter.summary_dict()
     summary_path = meter.write_summary(run_dir / "usage_summary.json")
     manifest = {
