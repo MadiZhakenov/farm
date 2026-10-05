@@ -1044,27 +1044,25 @@ def enforce_carousel_rules(
     classifier: Any = None,
     refill: Callable[[int], list[Any]] | None = None,
     max_check: int = MAX_CHECK_PER_SLIDE,
-    reuse_ok: Iterable[str] = (),
 ) -> list[SlideRuleResult]:
     """
     slides[i].candidates — уже отранжированный пул (индекс 0 = текущий выбор).
     Переставляет в [0] первый кандидат, который проходит правила.
-    Если никто не проходит — правила ослабляются по очереди
-    (место → повтор в серии → [дозапрос филлера] → предмет → лимит грязи),
-    но грязь на последнем слайде не пропускается никогда, пока есть хоть
-    один чистый кадр.
+    Если никто не проходит — сначала дозапрос (филлеры), потом правила
+    ослабляются по очереди: место → лимит грязи → лица → повтор в серии.
+    Повтор в серии и лица — последними: раньше они снимались до дозапроса,
+    и одно фото вставало в две карусели (аудит 2026-10-05). Грязь на
+    последнем слайде не пропускается никогда, пока есть хоть один чистый
+    кадр; один и тот же кадр дважды в карусель не ставится.
 
     Порядок выбора: смысловые слайды (хук, продукт, сцена) → финал →
     филлеры, чтобы уступал филлер, а не хук. Слайд с продуктом не считается
-    в лимите предмета. reuse_ok — pin из банка филлеров батча: на филлер-
-    слайде такой кадр можно повторить из другой карусели (лимит повторов
-    держит сам банк).
+    в лимите предмета.
     """
     n = len(slides)
     classifier = classifier or get_photo_classifier()
     used = used or UsedIndex()
     mess_budget = MAX_MESS_HEAVY if heavy else MAX_MESS_NORMAL
-    reuse_pins = {str(p) for p in reuse_ok if p}
     results: list[SlideRuleResult | None] = [None] * n
     place_count: Counter[str] = Counter()
     subject_count: Counter[str] = Counter()
@@ -1078,10 +1076,11 @@ def enforce_carousel_rules(
     semantic = [j for j in range(n) if j != last and _role(j) in SEMANTIC_ROLES]
     fillers = [j for j in range(n) if j != last and j not in semantic]
     order = semantic + ([last] if n > 0 else []) + fillers
-    strict_tiers = (("prefer_free",), (), ("place",), ("place", "series"))
+    strict_tiers = (("prefer_free",), (), ("place",))
     relax_tiers = (
-        ("place", "series", "faces"),
-        ("place", "series", "faces", "mess_budget"),
+        ("place", "mess_budget"),
+        ("place", "mess_budget", "faces"),
+        ("place", "mess_budget", "faces", "series"),
     )
 
     # Кадры, которые у какого-то слайда единственные: другим слайдам их не отдаём
@@ -1097,7 +1096,6 @@ def enforce_carousel_rules(
         slide = slides[i]
         role = _role(i)
         is_final = i == last and n > 1
-        filler = role in FILLER_ROLES
         subject_applies = role != ROLE_PRODUCT
         faces_banned = i > 0  # хук может показать героиню, дальше — без чужих лиц
         cands = list(getattr(slide, "candidates", []) or [])
@@ -1139,10 +1137,8 @@ def enforce_carousel_rules(
                         continue
                     if "mess_budget" not in relaxed and f.is_mess and mess_used >= mess_budget:
                         continue
-                    if (
-                        "series" not in relaxed
-                        and not (filler and str(getattr(c, "pin_id", "")) in reuse_pins)
-                        and used.is_used(getattr(c, "pin_id", None), f.fp)
+                    if "series" not in relaxed and used.is_used(
+                        getattr(c, "pin_id", None), f.fp
                     ):
                         continue
                     if (
@@ -1177,7 +1173,17 @@ def enforce_carousel_rules(
             picked = evaluate(cands, relax_tiers)
         relaxed: list[str]
         if picked is None:
-            idx, relaxed = 0, ["all"]
+            # хоть что-то, но не кадр, который уже стоит в этой карусели
+            idx = next(
+                (
+                    j
+                    for j, c in enumerate(cands)
+                    if (fj := _cand_features(c, classifier).fp) is None
+                    or not fp_matches(fj, chosen_fps)
+                ),
+                0,
+            )
+            relaxed = ["all"]
             print(
                 f"[rules] слайд {i + 1}: ни один кадр не прошёл правила — "
                 f"оставлен лучший по рангу"

@@ -86,6 +86,16 @@ STOCK_VETO_PEN_MIN = 0.18  # studio heuristic
 STOCK_AGREE_MIN = True  # score = min(sup, zs−pen)
 # Hard veto only when >=2 stock heads agree (cuts false kills on live UGC)
 STOCK_VETO_MIN_HITS = 2
+# Итог = обученная модель живости. Zero-shot, эвристики и вето её только портили:
+# на ручной разметке 2026-10-05 (205 кадров) AUC 0.88 против 0.79 у «худшего из
+# двух + вето»; при пороге 0.55 доля живых среди прошедших 74% против 67%, найдено
+# живых 69% против 28%. Без модели (нет файла, сломалась загрузка) оценка
+# падает с LivenessModelError, а не тихо уходит на zero-shot (AUC 0.53).
+MODEL_ONLY = True
+
+
+class LivenessModelError(RuntimeError):
+    """Модель живости недоступна при MODEL_ONLY — собирать карусели нельзя."""
 
 # Сигнатура якорей — при смене текста пересчитываем эмбеддинги
 _ANCHOR_SIG = hash(
@@ -95,6 +105,7 @@ _ANCHOR_SIG = hash(
         STOCK_VETO_ENABLED,
         STOCK_AGREE_MIN,
         STOCK_VETO_MIN_HITS,
+        MODEL_ONLY,
     )
 )
 
@@ -189,6 +200,8 @@ def _combine_signals(
     Returns (score 0..1, list of veto reasons).
     """
     reasons: list[str] = []
+    if supervised is not None and MODEL_ONLY:
+        return float(min(1.0, max(0.0, float(supervised)))), reasons
     zs = max(0.0, float(zero_shot) - float(penalty))
     if supervised is None:
         score = zs
@@ -314,8 +327,12 @@ class UGCFilter:
                     clf.predict_live_scores_from_vecs(img_vecs),
                     dtype=np.float32,
                 )
-        except Exception:
+        except Exception as exc:
+            if MODEL_ONLY:
+                raise LivenessModelError(f"модель живости не сработала: {exc}") from exc
             supervised = None
+        if supervised is None and MODEL_ONLY:
+            raise LivenessModelError("модель живости не загружена (data/ugc_live_model.pkl)")
 
         self.ensure()
         assert self._ugc_vecs is not None and self._stock_vecs is not None

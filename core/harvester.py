@@ -24,6 +24,8 @@ from urllib.parse import quote_plus, urlparse
 import httpx
 from PIL import Image
 
+from core.ugc_filter import LivenessModelError
+
 # Корень репо — только для query-scoped кэша (md5 запроса).
 # НИКОГДА не подмешиваем test_downloads/ или общий data/cache/.
 _HARVESTER_ROOT = Path(__file__).resolve().parent.parent
@@ -115,14 +117,16 @@ SOFT_REL_FLOOR = 0.02
 # Taste: veto floor (DROP < 0.40) + soft rank weight (does not dominate UGC).
 TASTE_ENABLED = True
 TASTE_VETO_ONLY = True  # True = hard DROP below TASTE_HARD_FLOOR (always on with taste)
-# Separate attractiveness / craft (not personal taste, not anti-stock)
+# «Эстетика» — только техническая защита от битых кадров (aesthetic_filter):
+# в ранг не входит, её вес отдан живости. Полы — по разметке 2026-10-05:
+# 0.25 отсекает 1 живой из 71 и ни одного стокового.
 AESTHETIC_ENABLED = True
-AESTHETIC_HARD_FLOOR = 0.38
-EMERGENCY_AESTHETIC_FLOOR = 0.35
+AESTHETIC_HARD_FLOOR = 0.25
+EMERGENCY_AESTHETIC_FLOOR = 0.20
 FINAL_REL_W = 0.30
 FINAL_TASTE_W = 0.10 if TASTE_ENABLED else 0.0
-FINAL_UGC_W = 0.45 if TASTE_ENABLED else 0.55
-FINAL_AESTHETIC_W = 0.15 if AESTHETIC_ENABLED else 0.0
+FINAL_UGC_W = 0.60 if TASTE_ENABLED else 0.70
+FINAL_AESTHETIC_W = 0.0
 FINAL_HARM_W = 0.0
 # Intra-carousel visual dedupe (cosine on L2 SigLIP embeds)
 VISUAL_DEDUPE_ENABLED = True
@@ -2028,14 +2032,11 @@ def looks_like_flat_gradient(image: Image.Image) -> bool:
 
 def looks_like_low_quality(image: Image.Image, *, bytes_len: int = 0) -> bool:
     """
-    Soft/noisy/tiny phone dumps we never want in a carousel.
-    - short side too small
-    - tiny file (heavy compress / icon)
-    - extreme soft/mush (center-crop Laplacian + Tenengrad + FFT must agree)
-    - near-uniform mush
-
-    Intentionally strict-AND on blur: rainy glass / night vibe is soft by nature
-    and must NOT be mass-dropped (breaks review «Найти» / vibe harvest).
+    Только явный брак: маленькая картинка, крошечный файл (пережатая иконка),
+    мёртвая плоская мыльность. Правило «2 из 3 мер резкости» убрано: оно
+    выкидывало каждый пятый скачанный кадр, и половина из них — живые
+    (котята на коленях, наушники на пледе: гладкий мех и ткань «мыльные»
+    по резкости). Мыльный сток отсекает модель живости (аудит 2026-10-05).
     """
     try:
         import numpy as np
@@ -2050,13 +2051,12 @@ def looks_like_low_quality(image: Image.Image, *, bytes_len: int = 0) -> bool:
         if bytes_len and bytes_len < 18_000:
             return True
 
-        # Center crop: global soft-focus often still has edge noise; measure subject.
+        # Центр кадра: мыльность меряем по сюжету, а не по краям.
         cw, ch = int(w * 0.70), int(h * 0.70)
         left, top = (w - cw) // 2, (h - ch) // 2
         crop = img.crop((left, top, left + cw, top + ch))
         small = crop.resize((256, 256), Image.Resampling.BILINEAR)
         gray = np.asarray(small.convert("L"), dtype=np.float32)
-
         lap = (
             -4 * gray
             + np.roll(gray, 1, 0)
@@ -2064,31 +2064,7 @@ def looks_like_low_quality(image: Image.Image, *, bytes_len: int = 0) -> bool:
             + np.roll(gray, 1, 1)
             + np.roll(gray, -1, 1)
         )
-        lap_var = float(lap.var())
-
-        gx = np.roll(gray, 1, 1) - np.roll(gray, -1, 1)
-        gy = np.roll(gray, 1, 0) - np.roll(gray, -1, 0)
-        ten = float((gx * gx + gy * gy).mean())
-
-        mag = np.abs(np.fft.fftshift(np.fft.fft2(gray)))
-        yy, xx = np.ogrid[:256, :256]
-        r = np.sqrt((yy - 128) ** 2 + (xx - 128) ** 2)
-        hi = float(mag[r > 40].mean())
-        lo = float(mag[r <= 20].mean()) + 1e-6
-        fft_ratio = hi / lo
-
-        # Extreme mush only (AB s2_new …40902049: lap≈210 ten≈375 fft≈0.018).
-        # Require agreement — single soft metric alone is common for rain/night vibe.
-        mush_votes = 0
-        if lap_var < 240.0:
-            mush_votes += 1
-        if ten < 400.0:
-            mush_votes += 1
-        if fft_ratio < 0.019:
-            mush_votes += 1
-        if mush_votes >= 2:
-            return True
-        if lap_var < 200.0 and float(gray.std()) < 28.0:
+        if float(lap.var()) < 200.0 and float(gray.std()) < 28.0:
             return True  # dead-soft + flat
         return False
     except Exception:
@@ -2270,10 +2246,12 @@ def weighted_promote_top3(
     ranked: list[CandidateImage],
     *,
     mode: str = "hard_top3_sample",
+    rng: random.Random | None = None,
 ) -> list[CandidateImage]:
     """
     Взвешенный выбор среди топ-3 по combined_score; победитель -> индекс 0.
     Не трогает пул с единственным кандидатом; нулевые веса страхуем.
+    rng — свой генератор (с сидом от темы), чтобы прогон повторялся.
     """
     if not ranked:
         return ranked
@@ -2283,7 +2261,7 @@ def weighted_promote_top3(
         return ranked
     top_candidates = ranked[:3]
     weights = [max(float(c.combined_score), 1e-6) for c in top_candidates]
-    chosen = random.choices(top_candidates, weights=weights, k=1)[0]
+    chosen = (rng or random).choices(top_candidates, weights=weights, k=1)[0]
     chosen.selection_mode = mode
     rest = [c for c in ranked if c is not chosen]
     return [chosen] + rest
@@ -3596,6 +3574,8 @@ class PinterestHarvester:
                 [c.image for c in candidates],
                 cache_keys=_cand_pin_keys(candidates),
             )
+        except LivenessModelError:
+            raise
         except Exception as exc:
             self._add_timing(siglip=time.perf_counter() - t0)
             self._status(
@@ -4282,6 +4262,8 @@ class PinterestHarvester:
             for c, s in zip(pre, scores):
                 c.ugc_score = float(s)
                 c.ugc_scored = True
+        except LivenessModelError:
+            raise
         except Exception:
             for c in pre:
                 c.ugc_score = 0.5
@@ -4918,6 +4900,8 @@ class PinterestHarvester:
                     # Feed scrapbook even on STRICT miss (next slide free hit)
                     for c in cands:
                         self._remember_candidate(c)
+                except LivenessModelError:
+                    raise
                 except Exception:
                     for c in cands:
                         if not getattr(c, "ugc_scored", False):
@@ -5212,6 +5196,8 @@ class PinterestHarvester:
                 for c, s in zip(cands, scores):
                     c.ugc_score = float(s)
                     c.ugc_scored = True
+            except LivenessModelError:
+                raise
             except Exception:
                 for c in cands:
                     c.ugc_score = 0.45

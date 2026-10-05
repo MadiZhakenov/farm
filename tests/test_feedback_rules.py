@@ -657,20 +657,17 @@ def test_subject_relaxed_only_when_nothing_else():
     assert "subject" in res[1].relaxed
 
 
-def test_bank_filler_may_repeat_series_photo_but_semantic_may_not():
+def test_series_photo_is_not_repeated_on_filler_or_semantic_slide():
     old = Cand("old-pin", seed=777)
     used = UsedIndex()
     used.add("old-pin", image_fingerprint(old.image))
-    fresh = Cand("fresh", seed=778)
-    # филлер: pin из банка батча — повтор разрешён
-    slides = [Slide([Cand("hook", seed=1)]), Slide([old, fresh]), Slide([Cand("fin", seed=3)])]
-    run_rules(slides, roles=["scene", "neutral", "final"], used=used, reuse_ok={"old-pin"})
-    assert slides[1].candidates[0].pin_id == "old-pin"
-    # смысловой слайд: тот же pin занят в серии — берём свежий
-    old2 = Cand("old-pin", seed=777)
-    slides = [Slide([Cand("hook", seed=1)]), Slide([old2, Cand("fresh2", seed=779)]), Slide([Cand("fin", seed=3)])]
-    run_rules(slides, roles=["scene", "scene", "final"], used=used, reuse_ok={"old-pin"})
-    assert slides[1].candidates[0].pin_id == "fresh2"
+    # и филлер, и смысловой слайд берут свежий кадр, если он есть
+    for role in ("neutral", "scene"):
+        stale = Cand("old-pin", seed=777)
+        slides = [Slide([Cand("hook", seed=1)]), Slide([stale, Cand("fresh", seed=778)]), Slide([Cand("fin", seed=3)])]
+        res = run_rules(slides, roles=["scene", role, "final"], used=used)
+        assert slides[1].candidates[0].pin_id == "fresh"
+        assert not res[1].series_reused
 
 
 def test_filler_bank_reuse_cap_and_isolation():

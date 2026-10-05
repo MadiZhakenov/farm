@@ -48,9 +48,11 @@ BAD_ANCHORS: tuple[str, ...] = (
 )
 
 SOFTMAX_TEMP = 0.07
-# Blend: semantic beauty + technical craft
-ZS_W = 0.55
-TECH_W = 0.45
+# Только техническая часть (защита от битых кадров). Смысловая «красота»
+# штрафовала «случайный кадр, зерно, кривую рамку» — ровно то, что владелец
+# выбирает: AUC против живости 0.37 (аудит 2026-10-05).
+ZS_W = 0.0
+TECH_W = 1.0
 
 _ANCHOR_SIG = hash((GOOD_ANCHORS, BAD_ANCHORS, ZS_W, TECH_W))
 _LOCK = threading.Lock()

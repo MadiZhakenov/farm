@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 import gc
+import hashlib
 import json
+import random
 import sys
 import time
 from dataclasses import dataclass, field
@@ -31,6 +33,8 @@ from core.carousel_rules import (
     query_subjects,
 )
 from core.filler_bank import FillerBank
+from core import ugc_filter
+from core.ugc_filter import LivenessModelError
 from core.color_matcher import get_color_profile, get_harmony_score
 from core.harvester import (
     CandidateImage,
@@ -99,25 +103,45 @@ def _reorder_batch_slide(
     slide.selected = 0
 
 
-def _apply_combined_ranking(slide: BatchSlide) -> None:
+def _selection_rng(topic: str, variation_index: int) -> random.Random:
+    """Сид от темы: те же тексты → те же фото (честное сравнение «до/после»)."""
+    digest = hashlib.sha1(f"{topic}|{variation_index}".encode("utf-8")).hexdigest()
+    return random.Random(int(digest[:12], 16))
+
+
+def _apply_combined_ranking(
+    slide: BatchSlide, rng: random.Random | None = None
+) -> None:
+    """
+    Порядок кандидатов слайда после сборщика. Выбор сборщика (_wide_assign
+    видит всю карусель: смысл, предметы, близнецы) остаётся в [0], если
+    проходит полы живости и вкуса; цвет и общий балл лишь упорядочивают
+    запасные кадры. Случайный топ-3 (сид от темы) берёт только кадры не
+    дальше от текста, чем выбор сборщика (аудит 2026-10-05, №7).
+    """
     if not slide.candidates:
         return
     from core.harvester import TASTE_ENABLED, TASTE_HARD_FLOOR, UGC_HARD_FLOOR
 
-    # Не поднимать в [0] кадры ниже UGC/taste пола (hard_top3 не должен саботировать)
-    eligible = [
-        c
-        for c in slide.candidates
-        if float(getattr(c, "ugc_score", 0) or 0) >= UGC_HARD_FLOOR
-        and (
+    def _floor_ok(c: Any) -> bool:
+        return float(getattr(c, "ugc_score", 0) or 0) >= UGC_HARD_FLOOR and (
             not TASTE_ENABLED
             or float(getattr(c, "taste_score", 0) or 0) >= TASTE_HARD_FLOOR
         )
-    ]
-    if eligible:
-        slide.candidates = eligible + [
-            c for c in slide.candidates if c not in eligible
-        ]
+
+    def _rel(c: Any) -> float | None:
+        if not getattr(c, "text_relevance_scored", False):
+            return None
+        return float(getattr(c, "text_relevance", 0.0) or 0.0)
+
+    lead = slide.candidates[0]
+    lead_rel = _rel(lead)
+
+    def _on_topic(c: Any) -> bool:
+        r = _rel(c)
+        return lead_rel is None or r is None or r >= lead_rel
+
+    eligible_ids = {id(c) for c in slide.candidates if _floor_ok(c)}
     n = len(slide.candidates)
     if len(slide.harmony_scores) != n:
         slide.harmony_scores = [
@@ -136,8 +160,7 @@ def _apply_combined_ranking(slide: BatchSlide) -> None:
         harm = float(slide.harmony_scores[i] if i < len(slide.harmony_scores) else 0)
         cand.harmony_score = harm
         # Жёсткий штраф ниже пола — не выиграть hard_top3
-        taste_fail = TASTE_ENABLED and taste < TASTE_HARD_FLOOR
-        if ugc < UGC_HARD_FLOOR or taste_fail:
+        if id(cand) not in eligible_ids:
             combined = -1.0
         else:
             combined = combined_rank_score(
@@ -145,45 +168,38 @@ def _apply_combined_ranking(slide: BatchSlide) -> None:
             )
         cand.combined_score = combined
         scored.append((combined, i))
-    scored.sort(key=lambda x: x[0], reverse=True)
+    # выбор сборщика (если проходит полы) — первым, остальные по баллу
+    lead_first = id(lead) in eligible_ids
+    scored.sort(key=lambda x: (lead_first and x[1] == 0, x[0]), reverse=True)
     order = [i for _, i in scored]
     _reorder_batch_slide(slide, order, list(slide.harmony_scores))
-    if slide.candidates:
-        prior = getattr(slide.candidates[0], "selection_mode", "") or ""
-        # hard_top3 только среди eligible; emergency_* не ресемплим вверх стоком
-        if prior.startswith("emergency") or prior == "single_pass_argmax":
-            # если emergency ниже пола — сдвинуть на лучший eligible alt
-            top = slide.candidates[0]
-            if (
-                float(getattr(top, "ugc_score", 0) or 0) < UGC_HARD_FLOOR
-                and eligible
-            ):
-                slide.candidates = eligible + [
-                    c for c in slide.candidates if c not in eligible
-                ]
-                slide.selected = 0
-                print(
-                    f"[rank] replaced emergency ugc="
-                    f"{float(getattr(top, 'ugc_score', 0) or 0):.0%} "
-                    f"-> ugc={float(slide.candidates[0].ugc_score):.0%}"
-                )
-            else:
-                slide.selected = 0
-        else:
-            if not eligible:
-                # не сэмплить сток — пусть guarantee/refill ищет живое
-                print("[rank] no eligible ugc/taste — keep order, selected may refill")
-                slide.selected = 0
-            else:
-                slide.candidates = weighted_promote_top3(
-                    eligible
-                    + [c for c in slide.candidates if c not in eligible],
-                    mode="hard_top3_sample",
-                )
-                slide.selected = 0
+    promote = [
+        c for c in slide.candidates if id(c) in eligible_ids and _on_topic(c)
+    ] or [c for c in slide.candidates if id(c) in eligible_ids]
+    rest = [c for c in slide.candidates if all(c is not p for p in promote)]
+    prior = getattr(lead, "selection_mode", "") or ""
+    slide.selected = 0
+    if not promote:
+        # не сэмплить сток — пусть правила/дозапрос ищут живое
+        print("[rank] no eligible ugc/taste — keep order, selected may refill")
+        return
+    if prior.startswith("emergency") or prior == "single_pass_argmax":
+        if id(lead) not in eligible_ids:
+            slide.candidates = promote + rest
+            print(
+                f"[rank] replaced emergency ugc="
+                f"{float(getattr(lead, 'ugc_score', 0) or 0):.0%} "
+                f"-> ugc={float(slide.candidates[0].ugc_score):.0%}"
+            )
+        return
+    slide.candidates = (
+        weighted_promote_top3(promote, mode="hard_top3_sample", rng=rng) + rest
+    )
 
 
-def apply_color_harmony(slides: list[BatchSlide]) -> None:
+def apply_color_harmony(
+    slides: list[BatchSlide], rng: random.Random | None = None
+) -> None:
     """Якорь = слайд 1; ранг = rel×0.30 + taste×0.30 + ugc×0.40 (+ harm soft)."""
     if not slides:
         return
@@ -197,7 +213,7 @@ def apply_color_harmony(slides: list[BatchSlide]) -> None:
     anchor_slide.harmony_scores = [100.0] * len(anchor_slide.candidates)
     for c in anchor_slide.candidates:
         c.harmony_score = 100.0
-    _apply_combined_ranking(anchor_slide)
+    _apply_combined_ranking(anchor_slide, rng)
 
     anchor = anchor_slide.color_profiles[anchor_slide.selected]
     for s in slides[1:]:
@@ -208,7 +224,7 @@ def apply_color_harmony(slides: list[BatchSlide]) -> None:
         s.harmony_scores = scores_orig
         for c, h in zip(s.candidates, scores_orig):
             c.harmony_score = float(h)
-        _apply_combined_ranking(s)
+        _apply_combined_ranking(s, rng)
 
     # CRITICAL: harmony reorder can put the same pin back to [0] on two slides
     from core.harvester import dedupe_selected_across_slides
@@ -462,7 +478,7 @@ def build_one_carousel(
             )
         )
     status(f"[{index}] Color Matcher + локальный вкус…")
-    apply_color_harmony(batch_slides)
+    apply_color_harmony(batch_slides, rng=_selection_rng(topic, variation_index))
 
     rule_results = []
     if RULES_ENABLED:
@@ -523,7 +539,6 @@ def build_one_carousel(
             heavy=heavy,
             used=used_index,
             refill=_refill,
-            reuse_ok=filler_bank.known_pins() if filler_bank is not None else (),
         )
         _timer("3b. Правила карусели", t_rules)
 
@@ -766,6 +781,21 @@ def _topic_slug(topic: str, *, max_len: int = 32) -> str:
     return slug[:max_len].rstrip("_") or "topic"
 
 
+def _require_liveness_model() -> None:
+    """Без модели живости пачку не собираем: иначе каждый кадр получил бы
+    почти случайную оценку и в карусели пошёл бы сток."""
+    if not ugc_filter.MODEL_ONLY:
+        return
+    from core.ugc_classifier import get_ugc_live_classifier
+
+    try:
+        ok = get_ugc_live_classifier().is_trained
+    except Exception as exc:
+        raise LivenessModelError(f"модель живости не загрузилась: {exc}") from exc
+    if not ok:
+        raise LivenessModelError("модель живости не загружена (data/ugc_live_model.pkl)")
+
+
 def run_batch(
     *,
     topic: str = "",
@@ -798,6 +828,7 @@ def run_batch(
         except UnicodeEncodeError:
             on_status(text.encode("ascii", "replace").decode("ascii"))
 
+    _require_liveness_model()
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = out_root / f"run_{stamp}"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -960,6 +991,8 @@ def run_batch(
                     )
                 else:
                     _safe_status(f"[{i}] OK · {snap.line()}")
+        except LivenessModelError:
+            raise
         except OffCategoryError as off:
             result.skipped += 1
             msg = f"Пропущена тема #{i} (не про {category}): «{cur_topic[:70]}»"
