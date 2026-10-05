@@ -18,6 +18,7 @@ import argparse
 import json
 import random
 import re
+import shutil
 import sys
 from collections import Counter
 from pathlib import Path
@@ -47,9 +48,55 @@ SLIDES = [
     "Save this so you don't lose it.",
 ]
 
+# Версия про Magic Sort (2026-10-05): тот же сценарий, слайды 3–4 — игра
+SLIDES_MAGICSORT = [
+    "The ONE reason you're\nalways tired this fall 🍂😮‍💨\n\n"
+    "(and no, it's not your sleep)",
+    "I was exhausted too.\nEvery single day.\n\n"
+    "Coffee, early nights, vitamins,\na \"digital detox\"\nthat lasted 40 minutes.\nNOTHING helped.\n\n"
+    "Until I found one very funny thing\nthat changed everything.",
+    "Turns out my brain\nnever got a real break\nfrom work and notifications.\n\n"
+    "So every evening I turn off\nALL notifications,\nlight a candle, make tea\n\n"
+    "and pour colored liquids into tubes\nlike a very serious scientist.\n\n"
+    "It's called Magic Sort.",
+    "30 minutes in the evening\nand my brain is finally calm.\n\n"
+    "My only problem now\nis that the blue one won't fit.\n\n"
+    "Save this so you don't lose it.",
+]
+# Короткая версия про Magic Sort: текст как у Cozy Home, но «The ONE» и «open Magic Sort.»
+SLIDES_MAGICSORT_SHORT = [
+    "The ONE reason you're\nalways tired this fall 🍂😮‍💨\n\n"
+    "(and no, it's not your sleep)",
+    SLIDES[1],
+    "Turns out my brain\nnever got a real break\nfrom work and notifications\n\n"
+    "So every evening I turn off\nALL notifications,\nlight a candle, make tea\n\n"
+    "and open Magic Sort.",
+    SLIDES[3],
+]
+TEXTS = {"cozy": SLIDES, "magicsort": SLIDES_MAGICSORT, "magicsort_short": SLIDES_MAGICSORT_SHORT}
+
 MAX_W = int(W * 0.80)
 FONT_START, FONT_MIN = 54, 40
 PARA_GAP = 0.45  # доп. отступ между строками ТЗ, в долях высоты строки
+# Затемнение фото, чтобы белый текст читался: uniform — весь кадр
+# (выбор команды, 20%), band — только полоса за текстом посередине
+DARKEN = 0.20
+DARKEN_MODE = "uniform"
+BAND_HALF = 0.45  # полуширина полосы в долях половины высоты кадра
+
+
+def darken(img: Image.Image, strength: float = DARKEN, mode: str = DARKEN_MODE) -> Image.Image:
+    import numpy as np
+
+    if strength <= 0:
+        return img
+    if mode == "band":
+        y = np.linspace(-1, 1, img.height, dtype=np.float32)[:, None, None]
+        keep = 1 - strength * np.exp(-(y / BAND_HALF) ** 4)
+    else:
+        keep = 1 - strength
+    a = np.asarray(img.convert("RGB"), dtype=np.float32) * keep
+    return Image.fromarray(a.clip(0, 255).astype("uint8"))
 
 
 def _layout(text: str, size: int) -> tuple[list[list[str]], int, int] | None:
@@ -110,8 +157,9 @@ def plan(n: int, pools: list[list[Path]], rng: random.Random) -> list[list[Path]
             combo = []
             for k, pool in enumerate(pools):
                 cands = pool
-                if k == 2:  # слайд 3 не из того же видео, что слайд 1
-                    cands = [p for p in pool if source_of(p) != source_of(combo[0])]
+                if k == 2 and source_of(combo[0]).startswith("IMG_"):
+                    # слайд 3 не из того же видео, что слайд 1 (кадры из видео)
+                    cands = [p for p in pool if source_of(p) != source_of(combo[0])] or pool
                 low = min(use[k][p] for p in cands)
                 slack = 0 if attempt < 500 else 1
                 cands = [p for p in cands if use[k][p] <= low + slack]
@@ -130,14 +178,22 @@ def main() -> int:
     ap.add_argument("-n", type=int, default=50)
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--texts", choices=sorted(TEXTS), default="cozy")
+    for i in range(1, 5):
+        ap.add_argument(f"--s{i}", type=Path, default=STILLS / f"s{i}", help=f"папка кадров слайда {i}")
+    ap.add_argument("--flat", type=Path, help="ещё и одной папкой: sort_<карусель>_<слайд>_<id>.jpg")
+    ap.add_argument("--flat-id", default="1227")
+    ap.add_argument("--darken", type=float, default=DARKEN, help="0 — без затемнения")
+    ap.add_argument("--darken-mode", choices=("uniform", "band"), default=DARKEN_MODE)
     args = ap.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 
-    pools = [sorted(f for f in (STILLS / f"s{i}").glob("*.jpg") if not f.name.startswith("_"))
+    pools = [sorted(f for f in getattr(args, f"s{i}").glob("*.jpg") if not f.name.startswith("_"))
              for i in range(1, 5)]
     print("кадров: " + " · ".join(f"s{i + 1} {len(p)}" for i, p in enumerate(pools)), flush=True)
-    layers = [render_text(t) for t in SLIDES]
+    slides = TEXTS[args.texts]
+    layers = [render_text(t) for t in slides]
     carousels = plan(args.n, pools, random.Random(args.seed))
 
     args.out.mkdir(parents=True, exist_ok=True)
@@ -146,9 +202,12 @@ def main() -> int:
         d = args.out / f"{i:03d}"
         d.mkdir(exist_ok=True)
         for k, (src, layer) in enumerate(zip(combo, layers), 1):
-            bg = R.cover_resize(Image.open(src).convert("RGB"), W, H).convert("RGBA")
+            bg = darken(R.cover_resize(Image.open(src).convert("RGB"), W, H), args.darken, args.darken_mode).convert("RGBA")
             Image.alpha_composite(bg, layer).convert("RGB").save(d / f"{k}.jpg", quality=95)
-        manifest.append({"carousel": d.name, "frames": [p.name for p in combo], "texts": SLIDES})
+            if args.flat:
+                args.flat.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(d / f"{k}.jpg", args.flat / f"sort_{i}_{k}_{args.flat_id}.jpg")
+        manifest.append({"carousel": d.name, "frames": [p.name for p in combo], "texts": slides})
     (args.out / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
 
     for k in range(4):
