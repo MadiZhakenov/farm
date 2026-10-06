@@ -171,6 +171,24 @@ _BREAKUP = {
 }
 PRESETS["breakup1"] = {**_BREAKUP, "texts_file": D / "breakup_text1.txt"}
 PRESETS["breakup2"] = {**_BREAKUP, "texts_file": D / "breakup_text2.txt"}
+# «deleted_ms»: лицо 4 с (MyResultVideo) → игра 3 с (IMG_9758) → 1 с со съёмки
+# телефона (magicsort_story_clips_v2, phone) = 8 с; хуки «deleted», текст про Magic Sort
+CLIPS_P4 = ROOT / "output" / "clips_proj4"
+MAGICSORT_BODY = (
+    "My bestie told me to try Magic Sort\n"
+    "and I'm OBSESSED…\n"
+    "just LOOK at all these pretty colors\n"
+    "falling into place 😭🧪✨\n"
+    "my brain\n"
+    "finally got quiet 🌈💛"
+)
+PRESETS["deleted_ms"] = {
+    "clips": (CLIPS / "MyResultVideo_face_4s", CLIPS_P4 / "IMG_9758_play_3s", CLIPS_P4 / "phone_1s"),
+    "durs": (4.0, 3.0, 1.0),
+    "hooks": DELETED_HOOKS, "bodies": [MAGICSORT_BODY], "sticker": False, "body_top_y": 260,
+    "sounds": ["strokes", "kanye", "bes", "lochie", "lisa"],
+    "starts_file": "ugc_sound_starts_deleted_ms.json", "label": "hook",
+}
 SOUNDS: list[dict] = []
 SOUND_STARTS_FILE = ROOT / "ugc_sound_starts.json"
 STICKER = True
@@ -713,7 +731,7 @@ def main() -> int:
     print("старты звуков: " + ", ".join(f"{sd['name']} {sd['start']:.2f}с" for sd in SOUNDS), flush=True)
 
     if args.text_preview:
-        text_preview(firsts[0], ends[0], args.out)
+        text_preview(firsts[0], mids[0], args.out)  # текст 2–3 поверх середины (конец бывает 1 с)
         return 0
 
     rng = random.Random(args.seed)
