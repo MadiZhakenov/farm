@@ -57,6 +57,22 @@ PROJECTS: dict[str, dict] = {
             {"file": "IMG_9745.mov", "scorer": "play", "clip": 1.0, "start": 5.0, "end": 66.0},
         ],
     },
+    # девушка 3 с + игра Magic Sort 2 с (IMG_9758: до 3 с пустой стол, после 28.5 уходит)
+    "proj5": {
+        "out": ROOT / "output" / "clips_proj5",
+        "sources": [
+            {"file": "MyResultVideo.mp4", "scorer": "face", "clip": 3.0, "start": None, "end": None},
+            {"file": "IMG_9758.mov", "scorer": "play", "clip": 2.0, "start": 3.0, "end": 28.5},
+        ],
+    },
+    # 1253: девушка 3 с + игра Cozy Home 2 с (IMG_9753: до 5.5 с меню / загрузка)
+    "p1253": {
+        "out": ROOT / "output" / "clips_1253",
+        "sources": [
+            {"file": "IMG_9761.mp4", "scorer": "face", "clip": 3.0, "start": None, "end": None},
+            {"file": "IMG_9753.mov", "scorer": "play", "clip": 2.0, "start": 5.5, "end": None},
+        ],
+    },
 }
 # скореры cozy: "guy" = лицо, "girl" = игра
 COZY_ROLE = {"face": "guy", "play": "girl"}

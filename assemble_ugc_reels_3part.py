@@ -61,6 +61,8 @@ SOUND_LIB = {
     "uzi": (D / "tiktok_phileinevansprang_7683911977307049238_LilUziVert-WhatYouSaying.m4a", 11.25),  # вход 14.25 с
     "berry": (D / "tiktok_berryblind_7018946187533323522.m4a", 4.25),  # громче с 7.25 с
     "mammogus": (D / "tiktok_kukumber_art_7057616060727561474.m4a", 4.0),  # громче с 7.0 с
+    # 1252 (build_signs_reels.py): Temper City — Self Aware, из @berneruppercervicalchiro
+    "selfaware": (D / "music_1252" / "selfaware.m4a", 0.0),
 }
 
 # Плашка «Reply to …'s comment» — весь ролик, сверху слева (как в примере)
@@ -188,6 +190,14 @@ PRESETS["deleted_ms"] = {
     "hooks": DELETED_HOOKS, "bodies": [MAGICSORT_BODY], "sticker": False, "body_top_y": 260,
     "sounds": ["strokes", "kanye", "bes", "lochie", "lisa"],
     "starts_file": "ugc_sound_starts_deleted_ms.json", "label": "hook",
+}
+# «signs1252» — только для тюнера звука роликов 1252 (собирает build_signs_reels.py):
+# 3 с игры + 2 с игры, склейка на 3.0 с
+PRESETS["signs1252"] = {
+    "clips": (ROOT / "output" / "clips_1252" / "IMG_9758_play_3s", ROOT / "output" / "clips_1252" / "IMG_9758_play_2s"),
+    "durs": (3.0, 2.0),
+    "hooks": [], "bodies": [], "sticker": False, "body_top_y": 260,
+    "sounds": ["selfaware"], "starts_file": "ugc_sound_starts_1252.json", "label": "v",
 }
 SOUNDS: list[dict] = []
 SOUND_STARTS_FILE = ROOT / "ugc_sound_starts.json"
