@@ -150,6 +150,155 @@ PROFILES: dict[str, dict] = {
     },
 }
 
+# «правила папы» (реф @cravingthetea): слайды 9:16, эстетичные фото без лиц, как в рефе
+_DAD = {"no_faces": True, "out": (1080, 1920), "min_aspect": 1.4, "related_rounds": 1, "related_seeds": 8,
+        "weights": {"ref": 0.4, "text": 0.4, "ugc": 0.2}, "min_ref": 0.0}
+PROFILES["dad_s2"] = {**_DAD,  # «I'm Not Like Other Guys» — образ без лица, улица, осень
+    "ref": [ROOT / "downloads" / "dad_rules" / "ref" / "slide_2.jpg"],
+    "anchors": ["faceless outfit photo of a girl in a leather jacket and jeans on a city street",
+                "aesthetic fall street style, cropped at the neck, no face"],
+    "queries": ["leather jacket outfit aesthetic", "fall outfit street aesthetic", "faceless outfit aesthetic",
+                "city walk outfit fall", "brown leather jacket jeans outfit", "street style autumn aesthetic",
+                "outfit inspo no face", "fall aesthetic girl walking city"]}
+PROFILES["dad_s3"] = {**_DAD,  # «Face-Down Phone» — телефон экраном вниз на столе, свидание
+    "ref": [ROOT / "downloads" / "dad_rules" / "ref" / "slide_3.jpg"],
+    "anchors": ["a smartphone lying face down on a restaurant table next to two drinks",
+                "date night table with wine glasses and a phone face down, cozy dim light"],
+    "queries": ["phone face down on table", "date night table aesthetic", "restaurant table wine aesthetic",
+                "dinner date aesthetic table", "two glasses of wine aesthetic", "cafe table phone aesthetic",
+                "bar date night aesthetic", "candle dinner table aesthetic"]}
+PROFILES["dad_s5"] = {**_DAD,  # «Exit Rule» — свои деньги, свои ключи, свой план
+    "ref": [ROOT / "downloads" / "dad_rules" / "ref" / "slide_4.jpg"],
+    "anchors": ["a woman's hand holding car keys, aesthetic close-up",
+                "car keys, wallet and cash on a table, independent woman aesthetic"],
+    "queries": ["car keys aesthetic", "holding car keys aesthetic", "keys and wallet aesthetic",
+                "new car keys girl", "wallet aesthetic cash", "keys coffee aesthetic", "car key in hand aesthetic",
+                "independent woman aesthetic"]}
+PROFILES["dad_s6"] = {**_DAD,  # «если спрашиваешь дважды…» — тихий кадр: кофе, кафе, осень
+    "ref": [ROOT / "downloads" / "dad_rules" / "ref" / "slide_6.jpg"],
+    "anchors": ["an iced coffee on an outdoor cafe table with fallen autumn leaves",
+                "quiet moody cafe aesthetic, coffee on a wooden bench, no people"],
+    "queries": ["iced coffee aesthetic outside", "coffee autumn aesthetic", "cafe table aesthetic fall",
+                "iced latte bench aesthetic", "coffee and book aesthetic", "rainy cafe aesthetic",
+                "moody coffee aesthetic", "fall leaves coffee aesthetic"]}
+
+# «правила бабушки» (тот же реф @cravingthetea, Cozy Home): тема важнее сходства с рефом
+_GM = {**_DAD, "weights": {"ref": 0.2, "text": 0.6, "ugc": 0.2}}
+PROFILES["gm_s2"] = {**_GM,  # The Mother Rule — как он относится к маме
+    "ref": [ROOT / "downloads" / "dad_rules" / "ref" / "slide_6.jpg"],
+    "anchors": ["a grown son holding his elderly mother's hand, warm candid photo, faces not visible",
+                "a man bringing a bouquet of flowers to his mother, cozy home, candid"],
+    "queries": ["son holding mom hand aesthetic", "flowers for mom aesthetic", "mother and son aesthetic",
+                "holding mother's hand aesthetic", "family sunday dinner aesthetic", "mom and son hands",
+                "sunday lunch at mom's aesthetic", "bouquet for mom aesthetic"]}
+PROFILES["gm_s3"] = {**_GM,  # The Birthday Rule
+    "ref": [ROOT / "downloads" / "dad_rules" / "ref" / "slide_6.jpg"],
+    "anchors": ["a birthday cake with lit candles on a table, cozy aesthetic, no people",
+                "birthday flowers and a wrapped gift on a table, aesthetic photo"],
+    "queries": ["birthday cake candles aesthetic", "birthday aesthetic", "birthday flowers gift aesthetic",
+                "birthday dinner aesthetic", "slice of cake candle aesthetic", "birthday table aesthetic",
+                "birthday balloons aesthetic", "heart cake aesthetic"]}
+PROFILES["gm_s5"] = {**_GM,  # The Running-Away Money Rule — «just in case money»
+    "ref": [ROOT / "downloads" / "dad_rules" / "ref" / "slide_6.jpg"],
+    "anchors": ["hands holding cash in an envelope, savings aesthetic",
+                "a wallet with cash and a bank card on a table, aesthetic close-up"],
+    "queries": ["cash envelope aesthetic", "savings jar aesthetic", "wallet cash aesthetic", "money aesthetic hands",
+                "cash stuffing envelopes", "piggy bank aesthetic", "counting money aesthetic", "bank card aesthetic"]}
+PROFILES["gm_s6"] = {**_GM,  # Her last rule — смех: пара держится за руки / смеётся
+    "ref": [ROOT / "downloads" / "dad_rules" / "ref" / "slide_6.jpg"],
+    "anchors": ["an elderly couple holding hands, warm candid photo",
+                "a young couple laughing together walking in the rain, candid, faces not visible"],
+    "queries": ["old couple holding hands aesthetic", "couple holding hands aesthetic", "couple laughing aesthetic",
+                "couple in the rain aesthetic", "elderly couple aesthetic", "couple walking holding hands",
+                "grandparents holding hands", "couple aesthetic no face"]}
+
+# 1281 (Global Work, «потеряла работу, но кормлю семью»): живые домашние кадры 3:4 без лиц, рефов нет —
+# отбор по описанию сцены + «любительскость»; слайды 1 (лица семьи) и 6 (экран приложения) генерируем
+_GW = {"no_faces": True, "out": (1080, 1440), "min_aspect": 1.3, "related_rounds": 1, "related_seeds": 8,
+       "weights": {"ref": 0.0, "text": 0.7, "ugc": 0.3}, "min_ref": 0.0, "ref": []}
+PROFILES["gw_s2"] = {**_GW,  # утренняя кухня, кофе, рука/силуэт, детские рисунки или рюкзак; грустно
+    "anchors": ["a mug of coffee on a kitchen table in the early morning, a kid's school backpack nearby, quiet sad mood",
+                "a woman's hand holding a coffee mug in a dim kitchen at dawn, children's drawings on the fridge"],
+    "queries": ["morning coffee kitchen aesthetic", "early morning kitchen moody", "school backpack kitchen morning",
+                "kids drawings on fridge", "mom morning coffee", "coffee mug kitchen window morning",
+                "school morning routine kitchen", "lonely morning coffee"]}
+PROFILES["gw_s3"] = {**_GW, "max_text_chars": 40,  # ноутбук ночью, много вкладок с вакансиями
+    "anchors": ["an open laptop at night on a desk showing job search websites, dim room",
+                "a laptop screen glowing in the dark with many browser tabs, job applications"],
+    "queries": ["laptop at night aesthetic", "job search laptop", "working late laptop dark", "applying for jobs laptop",
+                "laptop in the dark", "late night laptop desk", "job hunting aesthetic", "laptop in bed at night"]}
+PROFILES["gw_s4"] = {**_GW, "max_text_chars": 40,  # тёмная комната, свет экрана, около часа ночи
+    "anchors": ["a dark bedroom at night lit only by the glow of a laptop screen, a clock showing 1 am",
+                "late night insomnia, someone at a laptop in a dark room, only screen light"],
+    "queries": ["late night laptop glow", "screen light in dark room", "1am aesthetic", "can't sleep laptop night",
+                "insomnia aesthetic night", "clock 1am aesthetic", "working at night dark room", "laptop glow dark bedroom"]}
+PROFILES["gw_s5"] = {**_GW, "max_text_chars": 2000,  # распечатанное резюме с пометками / стопка черновиков
+    "anchors": ["a printed resume on a desk with red pen corrections and sticky notes",
+                "a messy stack of printed cover letter drafts and a pen on a kitchen table"],
+    "queries": ["resume on desk aesthetic", "printed resume with notes", "job application papers desk",
+                "resume red pen", "cover letter draft", "stack of papers desk aesthetic",
+                "job hunting desk paperwork", "resume and coffee"]}
+PROFILES["gw_s7"] = {**_GW,  # семья со спины / рука мужа на её плече, тёплый свет
+    "anchors": ["a family seen from behind sitting together on a couch at home in warm evening light",
+                "a man's hand resting on a woman's shoulder at home, warm cozy light, faces not visible"],
+    "queries": ["family from behind aesthetic", "family on couch warm light", "hand on shoulder couple",
+                "family silhouette home", "husband hand on wife shoulder", "family cozy evening home",
+                "parents and kids from behind", "family hug from behind"]}
+
+# 1281, второй заход по 5 и 7 (первый дал офисные стопки бумаг и целующиеся пары)
+PROFILES["gw_s5b"] = {**_GW, "max_text_chars": 2000,
+    "anchors": ["a printed resume on a kitchen table at home with handwritten notes and highlighter marks, a coffee mug nearby",
+                "crumpled cover letter drafts next to a laptop on a home desk, pen corrections"],
+    "queries": ["resume with handwritten notes", "resume editing at home", "cv on table with coffee", "highlighted resume",
+                "job application at kitchen table", "rewriting my resume", "cover letter writing desk",
+                "resume printout pen"]}
+PROFILES["gw_s7b"] = {**_GW,
+    "anchors": ["a mother and her kids sitting on a couch seen from behind, cozy living room, warm lamp light",
+                "a family watching tv together on the sofa in the evening, seen from behind"],
+    "queries": ["mom and kids on couch from behind", "family watching tv from behind", "family movie night couch",
+                "mom hugging kids from behind", "family on sofa evening cozy", "kids cuddling mom couch",
+                "family back view home", "husband hand on wife shoulder at home"]}
+
+# 1283 (Magic Sort, «парень на лавочке под дождём играл в телефон»): как 1281 — живые кадры 3:4 без лиц;
+# слайд 1 (её селфи как в рефе @joey.growth) генерируем, на 4–6 экран телефона потом меняем на Magic Sort
+_RB = {**_GW}
+PROFILES["rb_s2"] = {**_RB, "max_text_chars": 40,  # скучные свидания: телефоны на столе, еду ещё не принесли
+    "anchors": ["two smartphones lying on a restaurant table next to two drinks, a boring first date, no food yet",
+                "a date night table at a restaurant with phones out and cocktails, waiting for the food"],
+    "queries": ["phones on restaurant table", "date night table aesthetic", "first date restaurant aesthetic",
+                "dinner date drinks table", "boring date aesthetic", "two drinks restaurant table",
+                "waiting for food restaurant aesthetic", "phone on table date night"]}
+PROFILES["rb_s3"] = {**_RB,  # дождливый вечер, парень на лавочке уткнулся в телефон (издалека / сбоку)
+    "anchors": ["a guy sitting alone on a bench in the rain in the evening, looking at his phone, seen from a distance",
+                "rainy city street at night with wet pavement and street lights, a young man on a bench with a phone"],
+    "queries": ["man on bench rain", "guy sitting on bench phone", "rainy evening city aesthetic", "rainy night street aesthetic",
+                "man sitting on bench at night", "rain bench aesthetic", "boy on bench rain aesthetic",
+                "rainy evening walk aesthetic"]}
+PROFILES["rb_s4"] = {**_RB, "max_text_chars": 40,  # «what are you playing?» — он поворачивает экран ко мне (POV)
+    "anchors": ["a man's hand holding a smartphone out toward the camera to show the screen, rainy street at night",
+                "POV someone shows you their phone screen, city lights bokeh in the rain"],
+    "queries": ["hand holding phone showing screen", "showing phone screen pov", "man holding phone out",
+                "phone in hand rain night", "holding phone city lights", "hand holding iphone night street",
+                "showing someone your phone", "phone screen rain aesthetic"]}
+PROFILES["rb_s5"] = {**_RB, "max_text_chars": 40,  # Magic Sort крупно: его руки, телефон с игрой, вечер, дождь
+    "anchors": ["close-up of a man's hands holding a smartphone and playing a mobile game, rain drops, evening street lights",
+                "hands playing a game on a phone while sitting on a bench at night"],
+    "queries": ["hands playing phone game", "man hands holding phone close up", "playing games on phone aesthetic",
+                "phone in hands rain", "mobile game in hands", "holding phone with both hands night",
+                "phone gaming aesthetic", "hands holding phone on bench"]}
+PROFILES["rb_s6"] = {**_RB, "max_text_chars": 40,  # «wanna try?» — он протягивает мне телефон; длинный текст
+    "anchors": ["a man's hand handing a smartphone to a woman, close-up of two hands passing a phone",
+                "POV a guy hands you his phone on a rainy evening, city lights"],
+    "queries": ["handing phone to someone", "passing phone hands", "giving phone hands close up", "two hands holding phone",
+                "couple sharing phone", "couple looking at phone together", "hand giving phone aesthetic",
+                "couple phone rain"]}
+PROFILES["rb_s7"] = {**_RB,  # вместе с тех пор: пара без лиц — за руки, под зонтом, со спины
+    "anchors": ["a young couple holding hands walking in the rain under an umbrella, seen from behind",
+                "a cozy couple cuddling, faces not visible, warm light"],
+    "queries": ["couple holding hands aesthetic", "couple under umbrella rain", "couple from behind aesthetic",
+                "couple walking in the rain", "couple hands aesthetic", "couple no face aesthetic",
+                "cozy couple aesthetic", "couple rainy night city"]}
+
 UGC_FLOOR = 0.45          # ниже — сток / глянец
 MIN_SHORT_SIDE = 600      # px у оригинала
 MIN_ASPECT = 1.1          # h / w — нужна вертикаль (3:4 после кропа)
@@ -243,7 +392,7 @@ class Pool:
         for c, im in zip(todo, ims):
             if im is None:
                 c.reasons.append("download")
-            elif im.height / im.width < MIN_ASPECT:
+            elif im.height / im.width < self.p.get("min_aspect", MIN_ASPECT):
                 c.reasons.append("landscape")
             else:
                 c.image = im
@@ -295,7 +444,7 @@ class Pool:
         small.thumbnail((640, 640))
         res = self._ocr.readtext(np.asarray(small), detail=1)
         chars = sum(len(t.strip()) for _b, t, conf in res if conf >= 0.45)
-        return chars > OCR_MAX_CHARS
+        return chars > self.p.get("max_text_chars", OCR_MAX_CHARS)
 
     def has_face(self, im: Image.Image) -> bool:
         import cv2
@@ -340,7 +489,7 @@ class Pool:
             full = fetch(self.cli, c.orig_url) or c.image
             if min(full.size) < MIN_SHORT_SIDE:
                 full = c.image if min(c.image.size) >= min(full.size) else full
-            img = ImageOps.fit(full, (OUT_W, OUT_H), Image.Resampling.LANCZOS, centering=(0.5, 0.42))
+            img = ImageOps.fit(full, self.p.get("out", (OUT_W, OUT_H)), Image.Resampling.LANCZOS, centering=(0.5, 0.42))
             name = f"{i:03d}_{c.pin_id}.jpg"
             img.save(out / name, quality=93)
             rows.append({

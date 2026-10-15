@@ -79,15 +79,19 @@ def screen_jobs(feats: np.ndarray, n: int, need_active: float, step: float = 0.5
 
 
 def main() -> int:
+    global CLIP
     ap = argparse.ArgumentParser()
     ap.add_argument("--screen-src", type=Path, default=Path(r"C:\Users\user\Downloads\VCIY4029.MP4"))
     ap.add_argument("--phone-src", type=Path, default=ROOT / "downloads" / "IMG_2225.MOV")
     ap.add_argument("--screen-feats", type=Path, required=True, help="npz из scan_game (feats)")
-    ap.add_argument("--phone-wins", type=Path, required=True, help="npy стартов окон съёмки")
+    ap.add_argument("--phone-wins", type=Path, help="npy стартов окон съёмки (нужно, если не --only screen)")
+    ap.add_argument("--no-grade", action="store_true", help="без экспозиции/контраста (исходные цвета)")
+    ap.add_argument("--clip-len", type=float, default=CLIP, help="длина клипа, с (по умолчанию 30)")
     ap.add_argument("-n", type=int, default=50)
     ap.add_argument("--only", choices=("screen", "phone"))
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
+    CLIP = args.clip_len
     args.out.mkdir(parents=True, exist_ok=True)
 
     tasks = []
@@ -98,7 +102,7 @@ def main() -> int:
             sel = "+".join(f"between(t,{a:.2f},{b:.2f})" for a, b in seg)
             span0, span1 = seg[0][0], seg[-1][1]
             vf = (f"select='{sel}',{DECIMATE},setpts=N/({SCREEN['src_fps'] * SCREEN['speed']}*TB),"
-                  f"{grade(SCREEN)},{vf_scale_crop_fps_sdr(1080, 1920, 30)}")
+                  f"{'' if args.no_grade else grade(SCREEN) + ','}{vf_scale_crop_fps_sdr(1080, 1920, 30)}")
             name = f"screen_{k:02d}_{int(span0 // 60):02d}m{int(span0 % 60):02d}s.mp4"
             # -ss до -i сдвигает время к 0 — интервалы пересчитываем от span0
             sel0 = "+".join(f"between(t,{a - span0:.2f},{b - span0:.2f})" for a, b in seg)

@@ -63,6 +63,8 @@ SOUND_LIB = {
     "mammogus": (D / "tiktok_kukumber_art_7057616060727561474.m4a", 4.0),  # громче с 7.0 с
     # 1252 (build_signs_reels.py): Temper City — Self Aware, из @berneruppercervicalchiro
     "selfaware": (D / "music_1252" / "selfaware.m4a", 0.0),
+    # 1253: звук из рилса instagram.com/reel/DWFuwGhjg16 (6.2 с)
+    "reel1253": (D / "music_1253" / "reel1253.m4a", 0.0),
 }
 
 # Плашка «Reply to …'s comment» — весь ролик, сверху слева (как в примере)
@@ -198,6 +200,12 @@ PRESETS["signs1252"] = {
     "durs": (3.0, 2.0),
     "hooks": [], "bodies": [], "sticker": False, "body_top_y": 260,
     "sounds": ["selfaware"], "starts_file": "ugc_sound_starts_1252.json", "label": "v",
+}
+PRESETS["signs1253"] = {
+    "clips": (ROOT / "output" / "clips_1253_v2" / "play_3s", ROOT / "output" / "clips_1253_v2" / "play_2s"),
+    "durs": (3.0, 2.0),
+    "hooks": [], "bodies": [], "sticker": False, "body_top_y": 260,
+    "sounds": ["reel1253"], "starts_file": "ugc_sound_starts_1253.json", "label": "v",
 }
 SOUNDS: list[dict] = []
 SOUND_STARTS_FILE = ROOT / "ugc_sound_starts.json"

@@ -54,6 +54,7 @@ PROJECTS = {
         "play": CLIPS / "clips_1252" / "IMG_9758_play_2s",
         "min_gap": 6.0,
         "title": ["5 signs someone", "actually likes you."], "title_px": 56, "title_cy": 0.14,
+        "title_top": 0.25,  # 2026-10-09: заголовок начинается на 25% высоты
         "caption": "most people miss #3", "caption_px": 52, "caption_cy": 0.50,  # середина экрана (обе версии)
     },
     # первая версия 1252: девушка 3 с + игра 2 с (уже собрано 100 шт. TT)
@@ -64,7 +65,18 @@ PROJECTS = {
         "caption": "most people miss #3", "caption_px": 52, "caption_cy": 0.86,  # ниже планшета
         "caption_cy_ig": 0.50,
     },
+    # 1253 v2 (2026-10-08): только игра Cozy Home — 3 с одного клипа + 2 с другого, исходники только
+    # IMG_9743/9745/9753/9759 (cut_1253_clips.py); пары из разных видео в приоритете, из одного — ≥ min_gap
     "1253": {
+        "face": CLIPS / "clips_1253_v2" / "play_3s",
+        "play": CLIPS / "clips_1253_v2" / "play_2s",
+        "min_gap": 6.0,
+        "title": ["5 signs you were forced", "to grow up too early"], "title_px": 58, "title_cy": 0.095,
+        "title_top": 0.25,  # 2026-10-09: заголовок начинается на 25% высоты
+        "caption": None,
+    },
+    # первая версия 1253: девушка 3 с (IMG_9761) + игра 2 с (уже собрано 100 шт. TT)
+    "1253_girl": {
         "face": CLIPS / "clips_1253" / "IMG_9761_face_3s",
         "play": CLIPS / "clips_1253" / "IMG_9753_play_2s",
         "title": ["5 signs you were forced", "to grow up too early"], "title_px": 58, "title_cy": 0.095,  # вариант B
@@ -131,15 +143,22 @@ def plate(lines: list[str], px: int) -> Image.Image:
     return img.crop(img.getbbox())
 
 
-def overlay_png(block: Image.Image, cy: float, dest: Path) -> None:
+def overlay_png(block: Image.Image, cy: float, dest: Path, top: float | None = None) -> None:
+    """cy — центр блока в долях высоты; top (если задан) — верхний край блока в долях высоты."""
     canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    canvas.alpha_composite(block, ((W - block.width) // 2, int(cy * H - block.height / 2)))
+    y = int(top * H) if top is not None else int(cy * H - block.height / 2)
+    canvas.alpha_composite(block, ((W - block.width) // 2, y))
     canvas.save(dest)
 
 
 def clip_start(p: Path) -> float:
     m = re.search(r"_([\d.]+)s\.mp4$", p.name)
     return float(m.group(1)) if m else 0.0
+
+
+def clip_source(p: Path) -> str:
+    m = re.search(r"IMG_\d+", p.name)
+    return m.group(0) if m else ""
 
 
 def plan(n: int, faces: list[Path], plays: list[Path], rng: random.Random,
@@ -150,6 +169,9 @@ def plan(n: int, faces: list[Path], plays: list[Path], rng: random.Random,
     gap = {}
     if min_gap is not None:
         for f, q in pairs:
+            if clip_source(faces[f]) != clip_source(plays[q]):
+                gap[(f, q)] = 1e6  # разные видео — склейка заметна сама, такие пары в приоритете
+                continue
             a, b = clip_start(faces[f]), clip_start(plays[q])
             gap[(f, q)] = b - (a + FACE_DUR) if b > a else a - (b + PLAY_DUR)
         pairs = [pq for pq in pairs if gap[pq] >= min_gap]
@@ -200,6 +222,8 @@ def main() -> int:
     ap.add_argument("--starts", type=Path, help="json {имя_файла_без_расширения: старт, с}")
     ap.add_argument("--suffix", default="", help="в конец имени файла, напр. 1260")
     ap.add_argument("--font", choices=["tiktok", "ig", "both"], default="tiktok")
+    ap.add_argument("--first", type=int, default=1,
+                    help="номер первого ролика: допаковка продолжает тот же план пар (напр. 101)")
     args = ap.parse_args()
     global TEXT_FONT
     pj = PROJECTS[args.project]
@@ -209,7 +233,8 @@ def main() -> int:
     faces = sorted(pj["face"].glob("*.mp4"))
     plays = sorted(pj["play"].glob("*.mp4"))
     rng = random.Random(args.seed)
-    pairs = plan(args.n, faces, plays, rng, pj.get("min_gap"))
+    # тот же сид → первые first-1 пар совпадают с уже собранными, берём продолжение
+    pairs = plan(args.first - 1 + args.n, faces, plays, rng, pj.get("min_gap"))[args.first - 1:]
     sounds = sorted(args.audio_dir.glob("*.*")) if args.audio_dir else []
     starts = json.loads(args.starts.read_text(encoding="utf-8")) if args.starts and args.starts.exists() else {}
     order = [i % len(sounds) for i in range(args.n)] if sounds else []
@@ -226,20 +251,21 @@ def main() -> int:
         manifest = []
         try:
             title_png, cap_png = work / "title.png", None
-            overlay_png(plate(pj["title"], pj["title_px"]), pj["title_cy"], title_png)
+            overlay_png(plate(pj["title"], pj["title_px"]), pj["title_cy"], title_png, pj.get("title_top"))
             if pj["caption"]:
                 cap_png = work / "cap.png"
                 cy = pj.get("caption_cy_ig", pj["caption_cy"]) if font == IG_FONT else pj["caption_cy"]
                 overlay_png(plate([pj["caption"]], pj["caption_px"]), cy, cap_png)
-            for i, (face, play) in enumerate(pairs, 1):
-                snd = sounds[order[i - 1]] if sounds else None
+            for k, (face, play) in enumerate(pairs):
+                i = args.first + k
+                snd = sounds[order[k]] if sounds else None
                 st = float(starts.get(snd.stem, 0.0)) if snd else 0.0
                 name = f"{i:03d}{'_' + args.suffix if args.suffix else ''}.mp4"
                 build(face, play, title_png, cap_png, snd, st, out / name, work)
                 manifest.append({"file": name, "clips": [face.name, play.name],
                                  "audio": snd.name if snd else None, "audio_start": st})
-                if i % 10 == 0 or i == args.n:
-                    print(f"[{sub} {i}/{args.n}]", flush=True)
+                if (k + 1) % 10 == 0 or k + 1 == args.n:
+                    print(f"[{sub} {k + 1}/{args.n}]", flush=True)
         finally:
             shutil.rmtree(work, ignore_errors=True)
         (out / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")

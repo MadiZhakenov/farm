@@ -166,6 +166,62 @@ PROFILES: dict[str, dict] = {
                     "startup founder late night work"],
     },
 }
+# 1285 (гипотеза 3) — живые видео той же локации для вставки в UNO-POV ролики. Эталон — кадры исходников
+# с размытым вшитым текстом (downloads/1285/ref_frames/<loc>, их делает build_1285_remix-скрипт извлечения).
+_R1285 = ROOT / "downloads" / "1285" / "ref_frames"
+_NEG_1285 = ["cinematic drone shot with color grading", "slow motion professional commercial",
+             "timelapse", "travel promo video with text titles", "animated graphics"]
+PROFILES.update({
+    "1285_airport": {
+        "ref_t": [], "refs": sorted((_R1285 / "airport").glob("*.jpg")),
+        "texts": ["amateur phone video inside an airport terminal: travellers waiting at the gate on rows of seats, "
+                  "big windows, overcast daylight",
+                  "walking through a modern airport terminal with a phone in hand, handheld first-person video",
+                  "airport gate seating area with people on their phones, casual vlog"],
+        "neg": _NEG_1285 + ["airplane taking off at sunset", "aircraft cockpit and pilots", "luxury private jet"],
+        "ban": r"\b(promo|sale|discount|ticket deal|course|cockpit|pilot)\b",
+        "ocr_max": 25, "no_face": True,
+        "queries": ["airport pov", "airport gate waiting", "airport terminal aesthetic", "airport walking pov",
+                    "waiting at the airport", "airport travelator", "airport window planes", "layover airport",
+                    "airport seating area", "travel day airport", "airport duty free", "boarding gate pov"],
+    },
+    "1285_restaurant": {
+        "ref_t": [], "refs": sorted((_R1285 / "restaurant").glob("*.jpg")),
+        "texts": ["amateur phone video at a cafe table: brunch plates with eggs and toast, iced drinks, "
+                  "friends' hands, natural daylight",
+                  "first-person view looking down at a brunch table in a casual cafe"],
+        "neg": _NEG_1285 + ["food commercial with slow motion pouring", "recipe tutorial cooking in a kitchen",
+                            "chef plating fine dining"],
+        "ban": r"\b(recipe|ingredients|how to make|promo|sale|discount)\b",
+        "ocr_max": 12, "no_face": True,
+        "queries": ["brunch pov", "brunch table aesthetic", "cafe brunch", "eggs benedict brunch",
+                    "brunch with friends", "coffee shop table pov", "breakfast cafe", "avocado toast brunch",
+                    "brunch date", "brunch aesthetic", "cafe breakfast table"],
+    },
+    "1285_subway": {
+        "ref_t": [], "refs": sorted((_R1285 / "subway").glob("*.jpg")),
+        "texts": ["amateur phone video inside a subway train car: seated passengers, floor and shoes, handrails, "
+                  "warm interior light",
+                  "first-person view sitting on the metro looking at people across the aisle"],
+        "neg": _NEG_1285 + ["train arriving at a platform", "high speed train exterior", "anime scene"],
+        "ban": r"\b(promo|sale|discount|anime)\b",
+        "ocr_max": 25, "no_face": True,
+        "queries": ["subway pov", "metro ride pov", "train commute pov", "subway aesthetic",
+                    "underground train pov", "metro passengers", "commuting on the subway", "subway car interior",
+                    "subway ride", "metro aesthetic", "train ride pov"],
+    },
+    "1285_office": {
+        "ref_t": [], "refs": sorted((_R1285 / "office").glob("*.jpg")),
+        "texts": ["amateur phone video in an office: desks with laptops, office chairs, coworkers working, warm light",
+                  "handheld walk through an open-plan office with colleagues at their desks"],
+        "neg": _NEG_1285 + ["stock footage business handshake meeting", "home office desk setup with candles"],
+        "ban": r"\b(promo|sale|discount|course)\b",
+        "ocr_max": 25, "no_face": True,
+        "queries": ["office pov", "office aesthetic", "work day office vlog", "open office coworkers",
+                    "office desk laptop pov", "corporate office aesthetic", "coworking space", "office life pov",
+                    "day in the life office", "office vibes", "working at the office"],
+    },
+})
 PAGES = 2            # страниц поиска на запрос (по 25)
 DUR_MIN, DUR_MAX = 3.0, 90.0
 TOP_FRAMES = 80      # сколько лучших по превью проверять по кадрам

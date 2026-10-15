@@ -453,7 +453,13 @@ def mix_music(voice: Path, music: Path, total: float, rel_db: float, start: floa
         return np.frombuffer(subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL).stdout, np.float32)
 
     v = load(voice)
-    mdur = media_duration(music)
+    # конец трека бывает тишиной (у digital_bard_ambient последние ~8 с) — старт берём так,
+    # чтобы весь кусок попал в звучащую часть, иначе в конце ролика музыка «пропадает»
+    full = load(music)
+    hop = sr // 2
+    loud = [i for i in range(0, len(full) - hop + 1, hop)
+            if np.sqrt(np.mean(full[i:i + hop] ** 2)) > 10 ** (-40 / 20)]
+    mdur = (loud[-1] + hop) / sr if loud else media_duration(music)
     if start is None:
         start = random.Random(str(seed_from)).uniform(0, max(0.0, mdur - total - 1))
     m = load(music, start, total + 0.1)[: len(v)]
