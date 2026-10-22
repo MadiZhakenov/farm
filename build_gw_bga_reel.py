@@ -60,6 +60,7 @@ SCREENS = [D / "screens" / "linkedin_169.mp4", D / "screens" / "indeed_169.mp4",
 SCREEN_SKIP = [0.5, 0.5, 0.6]        # пропуск начала записи (стоит на месте), с
 SHIFT, PANEL_W, PANEL_H, PANEL_TOP, PANEL_R = 260, 760, 428, 210, 22
 SUB_TOP_V2 = 1445
+SHIFT_V1 = 0                         # сдвиг видео вниз и в варианте 1 (если голова высоко — для других креаторов)
 
 
 # ---------------- тайминги ----------------
@@ -288,6 +289,10 @@ def main() -> int:
             parts.append(f"[sv{n}]trim=start={a0:.3f}:end={b0:.3f},setpts=PTS-STARTPTS{zf},setsar=1,split[m{n}][t{n}];"
                          f"[t{n}]crop=iw:{SHIFT}:0:0,vflip,gblur=sigma=28,eq=brightness=-0.05[tb{n}];"
                          f"[m{n}]crop=iw:ih-{SHIFT}:0:0[mb{n}];[tb{n}][mb{n}]vstack[v{n}]")
+        elif SHIFT_V1:
+            parts.append(f"[sv{n}]trim=start={a0:.3f}:end={b0:.3f},setpts=PTS-STARTPTS{zf},setsar=1,split[m{n}][t{n}];"
+                         f"[t{n}]crop=iw:{SHIFT_V1}:0:0,vflip,gblur=sigma=28,eq=brightness=-0.05[tb{n}];"
+                         f"[m{n}]crop=iw:ih-{SHIFT_V1}:0:0[mb{n}];[tb{n}][mb{n}]vstack[v{n}]")
         else:
             parts.append(f"[sv{n}]trim=start={a0:.3f}:end={b0:.3f},setpts=PTS-STARTPTS{zf},setsar=1[v{n}]")
         parts.append(f"[sa{n}]atrim=start={a0:.3f}:end={b0:.3f},asetpts=PTS-STARTPTS,"
@@ -298,12 +303,12 @@ def main() -> int:
                     "-map", "[a]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "14", "-c:a", "pcm_s16le", str(base)],
                    check=True)
     a = header_assets()
-    full = frame_layer(a, 1e9, [0, 0, 0], max((s[0] for s in subs), key=len))
+    sub_top = SUB_TOP_V2 if args.v2 else SUB_TOP
+    full = frame_layer(a, 1e9, [0, 0, 0], max((s[0] for s in subs), key=len), sub_top)
     bad = check_box(W, H, full.getchannel("A").point(lambda v: 255 if v > 10 else 0).getbbox())
     if bad:
         raise SystemExit(f"вне безопасной зоны: {bad}")
     dest = OUT / (f"bga_v2_{ID}.mp4" if args.v2 else f"bga_{ID}.mp4")
-    sub_top = SUB_TOP_V2 if args.v2 else SUB_TOP
     # окно сайта: с конца слова уровня до конца дубля
     panel_on = [next(e for txt, a0, e in subs if txt == tier and tk[0] - 0.01 <= a0 < tk[1])
                 for (_c, tier, _x), tk in zip(SCRIPT, takes)]

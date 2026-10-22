@@ -2304,9 +2304,14 @@ def _ai_flag_from_obj(obj: dict[str, Any]) -> bool | None:
     return None
 
 
+def _is_opaque_pin_id(pid: str) -> bool:
+    """С 2026-10 поиск Pinterest отдаёт вместо числового id непрозрачный («e1_AfqPShytu…»)."""
+    return bool(re.fullmatch(r"[a-z]\d_[A-Za-z0-9_-]{20,120}", pid))
+
+
 def _pin_from_obj(obj: dict[str, Any]) -> PinMeta | None:
     pid = str(obj.get("id") or obj.get("entityId") or "").strip()
-    if not re.fullmatch(r"\d{6,20}", pid):
+    if not (re.fullmatch(r"\d{6,20}", pid) or (obj.get("type") == "pin" and _is_opaque_pin_id(pid))):
         return None
     preview, orig = _pick_image_url(obj.get("images"))
     if not preview:
@@ -2357,7 +2362,7 @@ def _dedupe_pins(items: list[PinMeta], limit: int = MAX_SEARCH_PINS) -> list[Pin
         # ЗАПРЕТ: зомби img000 / pin_img000 (ненастоящий id, часто градиент-мусор)
         if is_fake_stub_pin_id(p.pin_id):
             continue
-        if not re.fullmatch(r"\d{6,20}", str(p.pin_id or "")):
+        if not (re.fullmatch(r"\d{6,20}", str(p.pin_id or "")) or _is_opaque_pin_id(str(p.pin_id or ""))):
             continue
         if vault is not None and vault.is_blacklisted(p.pin_id):
             blocked_n += 1

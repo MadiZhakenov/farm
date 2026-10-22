@@ -92,6 +92,8 @@ SLIDES = {
 # вертикальная раскладка: (центр заголовка, верх текста, низ текста) — мимо лиц (лифт: лицо 270–650 px)
 LAYOUT = {2: (300, 420, Y1), 3: (300, 420, Y1), 4: (260, 380, Y1), 5: (150, 655, Y1), 6: (300, 420, Y1),
           7: (300, 420, Y1)}
+COVER_TOP = 585                     # верх заголовка обложки (под лицом)
+CAROUSEL = 1                        # номер карусели в имени файла sort_<слайд>_<карусель>_<id>.jpg
 BODY_PX, HEAD_PX = 40, 48           # кегль рефа; уменьшается, если не влезает в безопасную зону
 LINE, PAD, RAD = 1.32, 0.42, 0.26   # шаг строк, поле по бокам, скругление (в долях кегля)
 
@@ -233,13 +235,13 @@ def main() -> int:
         boxes: list = []
         if n == 1:
             t = fit_plate(COVER_TITLE, 78, (255, 255, 255), (0, 0, 0))
-            put(canvas, t, cx, 585, boxes)
+            put(canvas, t, cx, COVER_TOP, boxes)
             # ширина подписи — как в рефе: 0.63 ширины заголовка (493 / 786 px)
             spx = int(t.height / len(COVER_TITLE) * 0.62)
             while yellow(COVER_SUB, spx).width > 0.63 * t.width and spx > 20:
                 spx -= 1
             s = yellow(COVER_SUB, spx)
-            put(canvas, s, cx, 585 + t.height + 30, boxes)
+            put(canvas, s, cx, COVER_TOP + t.height + 30, boxes)
         else:
             head, lines, text = SLIDES[n]
             hy, top, bottom = LAYOUT[n]
@@ -260,7 +262,7 @@ def main() -> int:
         bad = [v for b in boxes for v in check_box(W, H, b)]
         if bad:
             print(f"слайд {n}: вне безопасной зоны → {bad}")
-        canvas.convert("RGB").save(OUT / f"sort_{n}_1_{ID}.jpg", quality=95)
+        canvas.convert("RGB").save(OUT / f"sort_{n}_{CAROUSEL}_{ID}.jpg", quality=95)
     print("готово →", OUT)
     return 0
 

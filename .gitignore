@@ -48,6 +48,8 @@ downloads/*.txt.bak
 # per-project source media (downloads/1254/, downloads/music_1252/, …)
 downloads/1[0-9][0-9][0-9]/
 downloads/1[0-9][0-9][0-9]_*/
+downloads/1[0-9][0-9][0-9]*/
+downloads/meme_os/
 downloads/music_*/
 # per-project sources: client footage, sheets, research screenshots, cloud dumps
 downloads/gw_*/

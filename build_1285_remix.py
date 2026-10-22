@@ -18,7 +18,7 @@
 
   python build_1285_remix.py h1 --count 500 --out output/1285_500_h1 --jobs 5
   python build_1285_remix.py h1s --count 500 --out output/1285_500_h1_10s --jobs 5
-  python build_1285_remix.py h2 --count 500 --out output/1285_500_h2 --jobs 5   # h2_NNN_1278.mp4
+  python build_1285_remix.py h2 --count 500 --out output/1285_500_h2 --jobs 5   # h2_NNN_1285.mp4
 """
 
 from __future__ import annotations
@@ -581,6 +581,7 @@ def run_eq(cat: dict[str, Src], out: Path, seed: int, group: int, count: int) ->
 # Многие ролики клиента нарезаны из одной записи (иногда со сдвигом) — ищем общие куски кадр в кадр и не ставим
 # клипы одной записи ближе H2_NEAR секунд друг к другу (иначе первый клип = то, что «пару секунд назад» у второго).
 H2_LEN = {2: 5.0, 3: 10.0 / 3}
+H2_FULL = False                      # --full: длина = длине оригинала первого клипа, ровно на 2 или 3 части
 H2_NEAR = 5.0
 H2_QUOTA = {"Airport": 0.46, "Restaurant": 0.26, "Subway": 0.15, "Office": 0.13}
 LINK_TH, LINK_RUN = 0.8, 5          # совпадение кадров (корр.) и минимум 1 с подряд (5 к/с)
@@ -665,10 +666,15 @@ def run_h2(cat: dict[str, Src], count: int, out: Path, seed: int, locs: list[str
         got = None
         for _attempt in range(400):
             nclip = int(rng.choice([2, 3], p=[0.4, 0.6]))
-            L = H2_LEN[nclip]
-            nf = round(L * FPS)
             k1 = firsts[loc][fcur[loc] % len(firsts[loc])]               # первые клипы (= тексты) — по кругу
             fcur[loc] += 1
+            if H2_FULL:                                                   # длина как у оригинала первого клипа
+                if dur[k1] < EQ_TH3:
+                    nclip = 2
+                L = int(dur[k1] * FPS / nclip) / FPS
+            else:
+                L = H2_LEN[nclip]
+            nf = round(L * FPS)
             if dur[k1] < L:
                 continue
             text = TEXTS[k1]
@@ -717,7 +723,7 @@ def run_h2(cat: dict[str, Src], count: int, out: Path, seed: int, locs: list[str
         if mus is None:
             mm = [cat[k] for k in keys if cat[k].loc == loc and cat[k].music and cat[k].dur >= total]
             mus = mm[int(rng.integers(len(mm)))] if mm else None
-        dest = out / f"h2_{n:03d}_1278.mp4"
+        dest = out / f"h2_{n:03d}_1285.mp4"
         png = out / "_png" / f"h2_{n:03d}.png"
         png.parent.mkdir(parents=True, exist_ok=True)
         info = plate_png(text, [cat[k].box for k, _a, _b in clips], png, wrap, nl)
@@ -782,7 +788,7 @@ def run_h3(cat: dict[str, Src], count: int, out: Path, seed: int, only: list[str
         end = round((w0 + L) * FPS) / FPS
         pa = round(float(rng.uniform(0.3, max(0.31, pdur[pin] - d - 0.3))) * FPS) / FPS
         segs = [(s.path, w0, t0), (pin, pa, pa + d), (s.path, t1, end)]
-        dest = out / f"h3_{n:03d}_1278.mp4"
+        dest = out / f"h3_{n:03d}_1285.mp4"
         matte = CACHE / "matte" / (k.replace("/", "_") + ".png")
         JOBS.append((segs, (s.path, s.dur, w0), matte, dest, jitter(rng)))
         rep.append({"file": dest.name, "loc": loc, "src": k, "window": [round(w0, 2), round(end, 2)], "pin": pin.name,
@@ -817,7 +823,10 @@ def main() -> int:
     ap.add_argument("--only", nargs="*", help="ключи исходников (h1/h3) или локации (h2)")
     ap.add_argument("--jobs", type=int, default=4, help="сколько роликов рендерить параллельно")
     ap.add_argument("--force", action="store_true", help="перерендерить и уже существующие файлы")
+    ap.add_argument("--full", action="store_true", help="h2: длина как у оригинала первого клипа (без лимита 10 с)")
     a = ap.parse_args()
+    global H2_FULL
+    H2_FULL = a.full
     cat = catalog()
     if a.mode == "catalog":
         return 0
