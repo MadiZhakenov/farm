@@ -451,6 +451,184 @@ PROFILES["hw_s5"] = {**_HW, "no_faces": False, "ref": [],  # девушка в �
                 "halloween outfit mirror pic", "costume mirror selfie", "halloween costume aesthetic girl",
                 "fallen angel costume selfie", "mean girls cat costume selfie", "halloween fit check"]}
 
+# 1329 Inspoy «стилист: 5 хэллоуин-образов»: 3:4; s1 — девушка-стилист в студии (вешалка с костюмами, зеркало,
+# доска с образами, тыква), образы — девушка в костюме (живое фото с телефона), лица потом заменяем в Flow
+_ST = {"no_faces": False, "out": (1080, 1440), "min_aspect": 1.15, "related_rounds": 1, "related_seeds": 8,
+       "weights": {"ref": 0.0, "text": 0.7, "ugc": 0.3}, "min_ref": 0.0, "ref": [], "max_text_chars": 40}
+PROFILES["st_s1"] = {**_ST,
+    "anchors": ["a young female stylist in her styling studio with a clothing rack of costumes, a mirror and a mood board "
+                "of outfits on the wall, a pumpkin nearby, cozy halloween season",
+                "a fashion stylist woman standing next to a garment rack in a bright studio, halloween decor"],
+    "queries": ["stylist studio aesthetic", "fashion stylist at work", "stylist with clothing rack", "wardrobe stylist aesthetic",
+                "styling studio clothing rack", "fashion stylist girl aesthetic", "garment rack studio aesthetic",
+                "stylist mood board wall", "halloween costume rack", "stylist halloween", "fitting room stylist aesthetic",
+                "personal stylist aesthetic photo"]}
+PROFILES["st_witch"] = {**_ST,  # «ведьма дорого»: чёрное сатиновое платье, острая шляпа, тёмный макияж
+    "anchors": ["a young woman in an elegant black satin slip dress and a pointed witch hat with dark makeup, "
+                "expensive minimalist witch halloween costume, mirror selfie",
+                "a chic witch costume: black satin dress, black pointed hat, dark lips"],
+    "queries": ["elegant witch costume", "witch costume black dress", "classy witch halloween costume", "witch hat black dress",
+                "chic witch costume aesthetic", "satin dress witch costume", "witch costume mirror selfie",
+                "easy witch costume", "witch costume aesthetic girl", "dark feminine witch outfit", "witch makeup aesthetic",
+                "black satin slip dress outfit"]}
+PROFILES["st_vamp"] = {**_ST,  # «вампир»: бордовое бархатное платье, тёмная помада, бледная пудра
+    "anchors": ["a young woman in a burgundy velvet dress with dark red lipstick and pale skin, elegant vampire halloween "
+                "costume, mirror selfie",
+                "a chic vampire costume: deep red velvet dress, dark lips, pale makeup"],
+    "queries": ["vampire costume aesthetic", "velvet dress vampire costume", "burgundy velvet dress outfit", "classy vampire costume",
+                "vampire halloween costume girl", "vampire makeup aesthetic", "red velvet dress aesthetic",
+                "dark red lipstick aesthetic", "vampire costume mirror selfie", "elegant vampire outfit", "gothic velvet dress",
+                "easy vampire costume"]}
+PROFILES["st_angel"] = {**_ST,  # «ангел»: белое платье или белый костюм, крылья, светлый макияж
+    "anchors": ["a young woman in an all-white dress with feathered angel wings and soft light makeup, angel halloween "
+                "costume, mirror selfie",
+                "an all white angel costume: white dress or white suit, white feather wings"],
+    "queries": ["angel costume aesthetic", "all white angel costume", "angel wings costume girl", "white dress angel costume",
+                "angel halloween costume", "angel costume mirror selfie", "white suit angel costume", "angel makeup aesthetic",
+                "classy angel costume", "feather wings outfit", "angel costume ideas", "white outfit angel wings"]}
+
+# 1337 «style test A/B» (реф @moodonmute101): квадратные фото вариантов ответа, без лиц
+_Q = {"no_faces": True, "out": (1080, 1080), "min_aspect": 0.75, "related_rounds": 1, "related_seeds": 8, "ugc_floor": 0.15,
+      "weights": {"ref": 0.0, "text": 0.9, "ugc": 0.1}, "min_ref": 0.0, "ref": [], "max_text_chars": 30}
+for _k, _anch, _q in [
+    ("q_outfit_a", "an oversized cozy outfit: chunky oversized knit sweater and baggy trousers, aesthetic mirror selfie, face hidden",
+     ["oversized cozy outfit", "oversized sweater outfit aesthetic", "baggy cozy outfit", "oversized hoodie outfit aesthetic",
+      "comfy outfit mirror selfie", "oversized knit outfit", "cozy outfit aesthetic", "slouchy outfit aesthetic"]),
+    ("q_outfit_b", "a tailored sharp outfit: structured blazer and straight tailored trousers, aesthetic photo, face hidden",
+     ["tailored blazer outfit", "tailored outfit women aesthetic", "blazer and trousers outfit", "sharp tailored look",
+      "structured blazer outfit aesthetic", "suit outfit women aesthetic", "tailored trousers outfit", "power suit aesthetic"]),
+    ("q_color_a", "an outfit in soft neutral colours: beige, cream, oatmeal, aesthetic",
+     ["neutral outfit aesthetic", "beige outfit aesthetic", "cream outfit aesthetic", "soft neutral outfit", "all beige outfit",
+      "oatmeal outfit", "neutral tones outfit flat lay", "beige knit outfit"]),
+    ("q_color_b", "an outfit with one bold colour: a bright red or cobalt blue piece, aesthetic",
+     ["one bold color outfit", "red outfit aesthetic", "cobalt blue outfit", "bold color outfit aesthetic", "pop of color outfit",
+      "red coat outfit aesthetic", "bright color outfit", "colorful statement outfit"]),
+    ("q_jewel_a", "a stack of gold jewelry: many gold rings and bracelets on hands, layered gold necklaces, close-up",
+     ["gold jewelry stack", "stacked gold rings", "gold bracelet stack", "layered gold necklaces", "gold rings aesthetic hands",
+      "chunky gold jewelry aesthetic", "gold jewelry close up", "maximal gold jewelry"]),
+    ("q_jewel_b", "one tiny dainty piece of jewelry: a delicate thin gold necklace or a single tiny earring, close-up",
+     ["dainty necklace minimal", "tiny gold necklace", "minimal jewelry aesthetic", "delicate gold chain necklace",
+      "single tiny earring", "dainty jewelry close up", "minimalist necklace", "tiny pendant necklace"]),
+    ("q_shoes_a", "sneakers on feet, aesthetic outfit photo from above",
+     ["sneakers aesthetic", "white sneakers outfit", "sneakers pov", "new balance aesthetic", "sneakers outfit aesthetic",
+      "chunky sneakers aesthetic", "sneakers on feet", "everyday sneakers outfit"]),
+    ("q_shoes_b", "elegant heels on feet, aesthetic outfit photo",
+     ["heels aesthetic", "pointed heels aesthetic", "heels pov", "stiletto heels aesthetic", "kitten heels outfit",
+      "white heels aesthetic", "black heels outfit", "slingback heels aesthetic"]),
+]:
+    PROFILES[_k] = {**_Q, "anchors": [_anch], "queries": _q}
+
+# 1337, второй заход «эстетичнее»: рефы стиля = фото со слайдов рефа (downloads/1337/ref/photos — крупные планы,
+# мягкий тёплый свет, Pinterest-эстетика), UGC не учитываем, запросы — aesthetic / inspo / clean girl / old money
+_QV = {**_Q, "ugc_floor": 0.0, "weights": {"ref": 0.35, "text": 0.65, "ugc": 0.0},
+       "ref": sorted((ROOT / "downloads" / "1337" / "ref" / "photos").glob("*.jpg"))}
+_QV_STYLE = ", Pinterest aesthetic photo, soft warm natural light, close-up detail shot, clean muted tones, editorial"
+for _k, _anch, _q in [
+    ("qv_outfit_a", "an oversized cozy outfit, chunky knit sweater sleeves and baggy trousers",
+     ["oversized sweater aesthetic pinterest", "cozy knit sweater aesthetic", "chunky knit sweater sleeves aesthetic",
+      "oversized knit outfit inspo", "cozy outfit details aesthetic", "baggy jeans oversized sweater aesthetic",
+      "cozy girl aesthetic outfit", "knitwear aesthetic close up", "scandi cozy outfit", "oversized cardigan aesthetic"]),
+    ("qv_outfit_b", "a tailored sharp outfit, structured blazer and pressed tailored trousers",
+     ["old money outfit aesthetic", "tailored blazer aesthetic pinterest", "blazer outfit details aesthetic",
+      "tailored trousers aesthetic", "quiet luxury outfit aesthetic", "minimal blazer outfit inspo", "office siren outfit",
+      "structured blazer close up", "chic tailored outfit pinterest", "scandi style blazer outfit"]),
+    ("qv_color_a", "an outfit in soft neutral colours: beige, cream, oatmeal knit and trousers",
+     ["neutral outfit aesthetic pinterest", "cream outfit aesthetic", "beige aesthetic outfit details", "oatmeal knit aesthetic",
+      "clean girl neutral outfit", "vanilla girl outfit", "soft neutrals aesthetic", "neutral tones outfit inspo",
+      "beige knit sweater aesthetic", "cream tones aesthetic"]),
+    ("qv_color_b", "an outfit with one bold colour: one bright red or cobalt blue piece with neutral basics",
+     ["cherry red outfit aesthetic", "red sweater aesthetic pinterest", "cobalt blue outfit aesthetic", "red coat aesthetic",
+      "pop of red outfit inspo", "burgundy outfit aesthetic", "red bag outfit aesthetic", "blue sweater aesthetic pinterest",
+      "red knit aesthetic", "colour pop outfit pinterest"]),
+    ("qv_jewel_a", "a stack of gold jewelry: many gold rings, bracelets and layered necklaces on hands",
+     ["gold jewelry stack aesthetic", "chunky gold rings aesthetic", "gold bracelet stack pinterest", "layered gold necklaces aesthetic",
+      "gold jewelry aesthetic hands", "maximalist gold jewelry", "stacked rings aesthetic", "gold jewellery inspo"]),
+    ("qv_jewel_b", "one tiny dainty piece of jewelry: a delicate thin gold necklace on the collarbone",
+     ["dainty necklace aesthetic", "minimal gold necklace aesthetic", "tiny pendant necklace pinterest", "dainty jewelry aesthetic",
+      "delicate gold chain collarbone", "minimalist jewelry aesthetic", "clean girl jewelry", "small gold hoops aesthetic"]),
+    ("qv_shoes_a", "white sneakers on feet with soft socks and sweatpants",
+     ["sneakers aesthetic pinterest", "white sneakers aesthetic", "new balance aesthetic pinterest", "sneakers and socks aesthetic",
+      "clean girl sneakers", "sneakers outfit details aesthetic", "white trainers aesthetic", "asics aesthetic"]),
+    ("qv_shoes_b", "elegant pointed heels on feet, slim legs",
+     ["heels aesthetic pinterest", "white heels aesthetic", "pointed heels aesthetic", "slingback heels aesthetic",
+      "kitten heels aesthetic", "stiletto heels aesthetic legs", "black heels aesthetic pinterest", "old money heels"]),
+]:
+    PROFILES[_k] = {**_QV, "anchors": [_anch + _QV_STYLE], "queries": _q}
+
+# 1340 Inspoy «5 outfits that make you look 10 years younger»: 3:4; s1 — яркое селфи красивой девушки 30+ (лицо потом
+# новое во Flow), s2–s4 — образ разложен на кровати (как 1319), s5 — девушка в образе, селфи в зеркало (лицо за телефоном)
+_OY = {"no_faces": True, "out": (1080, 1440), "min_aspect": 1.15, "related_rounds": 1, "related_seeds": 8,
+       "weights": {"ref": 0.0, "text": 0.7, "ugc": 0.3}, "min_ref": 0.0, "ref": [], "max_text_chars": 40, "ugc_floor": 0.2}
+_OY_BED = ["outfit laid out on bed", "outfit flat lay bed", "outfit laid out on bed aesthetic", "outfit flat lay on white sheets",
+           "fall outfit laid out on bed", "outfit planning flat lay"]
+PROFILES["oy_s1"] = {**_OY, "no_faces": False,
+    "anchors": ["a bright sunny selfie of a beautiful stylish woman around 30, glowing skin, smiling, natural daylight, phone photo",
+                "a pretty woman taking a bright selfie outdoors in the sun, chic outfit, aesthetic but casual"],
+    "queries": ["bright selfie aesthetic woman", "sunny selfie aesthetic", "selfie golden hour woman", "chic woman selfie",
+                "pretty selfie natural light", "selfie outdoors sunny aesthetic", "30s woman style selfie", "glowy selfie aesthetic",
+                "car selfie sunny aesthetic", "selfie city sunny"]}
+PROFILES["oy_s2"] = {**_OY,  # 1. Enters the room
+    "anchors": ["an outfit laid out flat on a bed: red coat or red blazer, black turtleneck, straight black trousers, black ankle boots, gold earrings, top view"],
+    "queries": ["red coat outfit flat lay", "red blazer outfit flat lay", "red coat black turtleneck outfit", "red blazer black outfit",
+                "black turtleneck outfit flat lay", "red coat outfit"] + _OY_BED}
+PROFILES["oy_s3"] = {**_OY,  # 2. Plot twist
+    "anchors": ["an outfit laid out flat on a bed: black leather jacket, lace top, blue jeans, tall knee-high boots, chunky chain necklace, top view"],
+    "queries": ["leather jacket outfit flat lay", "lace top leather jacket outfit", "leather jacket jeans boots flat lay",
+                "knee high boots outfit flat lay", "chunky chain necklace outfit", "leather jacket outfit laid out"] + _OY_BED}
+PROFILES["oy_s4"] = {**_OY,  # 3. Walks in slow motion
+    "anchors": ["an outfit laid out flat on a bed: long burgundy or emerald satin dress, black trench coat, pointed black ankle boots, top view"],
+    "queries": ["burgundy dress outfit flat lay", "emerald dress outfit flat lay", "long satin dress flat lay", "trench coat dress outfit",
+                "slip dress trench coat outfit", "burgundy maxi dress outfit", "emerald green dress outfit"] + _OY_BED}
+PROFILES["oy_s5"] = {**_OY, "weights": {"ref": 0.0, "text": 0.5, "ugc": 0.5},
+    "anchors": ["a chic woman taking a full-length mirror selfie in a stylish fall outfit at home, phone covering her face, bright daylight"],
+    "queries": ["outfit mirror selfie chic", "fall outfit mirror selfie", "elegant outfit mirror selfie", "mirror selfie trench coat outfit",
+                "mirror selfie blazer outfit", "classy outfit mirror selfie", "30s woman outfit mirror selfie", "chic fall fit check"]}
+
+# 1341 Inspoy «5 outfits I wore for my husband»: 3:4; s1 — яркое фото девушки с мужем (одежда синий/зелёный/красный),
+# s2–s5 — она в образе в полный рост (фото «мужем» / селфи в зеркало), s6 — она в образе 5 + муж с кольцом/цветами;
+# лица потом заменяем во Flow (одна пара на всю карусель)
+_HB = {"no_faces": False, "out": (1080, 1440), "min_aspect": 1.15, "related_rounds": 1, "related_seeds": 8,
+       "weights": {"ref": 0.0, "text": 0.6, "ugc": 0.4}, "min_ref": 0.0, "ref": [], "max_text_chars": 40, "ugc_floor": 0.25}
+PROFILES["hb_s1"] = {**_HB,
+    "anchors": ["a bright happy phone photo of a young married couple, wife and husband in colourful outfits (cobalt blue, emerald green, red), sunny day",
+                "a stylish couple selfie in bright colours outdoors, candid, phone photo"],
+    "queries": ["couple photo bright colors", "colorful couple outfits", "couple selfie sunny", "husband and wife photo aesthetic",
+                "couple outfits red", "couple in blue outfits", "couple green outfit", "married couple selfie", "couple photo city summer",
+                "couple pictures colorful", "couple vacation photo bright", "couple matching colors"]}
+PROFILES["hb_look"] = {**_HB,
+    "anchors": ["a full-length photo of a stylish woman in a chic outfit, taken by her boyfriend on the street or at home, phone photo",
+                "a woman's full-body outfit mirror selfie at home, chic outfit, face visible"],
+    "queries": ["outfit photo full body street", "full length outfit photo woman", "ootd full body street", "boyfriend took my outfit picture",
+                "outfit pics city full body", "chic outfit full length photo", "street style woman full body photo", "outfit of the day photo street",
+                "fall outfit full body photo", "date night outfit full body", "coat and boots outfit street photo", "midi dress outfit street"]}
+PROFILES["hb_s6"] = {**_HB,
+    "anchors": ["a beautiful woman in an elegant outfit in the foreground, her husband in the background holding a bouquet of flowers or a ring box, romantic surprise, phone photo",
+                "a man on one knee with a ring proposing to a stylish woman on the street, candid phone photo"],
+    "queries": ["husband surprise flowers wife", "boyfriend holding flowers behind her", "man with bouquet surprise girlfriend", "proposal photo street candid",
+                "man on one knee proposal candid", "surprise proposal photo", "vow renewal proposal photo", "husband proposed again",
+                "boyfriend waiting with flowers", "proposal ring box photo", "romantic surprise flowers street", "proposal at restaurant photo"]}
+
+# 1338 (копия рефа @moodonmute101): обложка — ч/б фото девушки в полный рост на светлом фоне, лица не видно
+PROFILES["q38_cover"] = {**_QV, "out": (1080, 1440), "min_aspect": 1.2,
+    "ref": [ROOT / "downloads" / "1337" / "ref" / "slide1.jpg"],
+    "weights": {"ref": 0.5, "text": 0.5, "ugc": 0.0},
+    "anchors": ["black and white full-length fashion photo of a slim young woman in grey sweatpants and a fitted top "
+                "on a plain white studio background, arms over her head hiding her face, minimal editorial"],
+    "queries": ["black and white fashion photo woman", "minimal fashion photography white background", "sweatpants outfit studio photo",
+                "faceless fashion photography", "black and white editorial pose", "white background full body fashion",
+                "grey sweatpants outfit aesthetic", "monochrome fashion photoshoot", "studio fashion pose minimal",
+                "loungewear photoshoot white"]}
+# фидбек клиента: обложка цветная и «как с телефона», не фотосессия → селфи в зеркало / фото подруги, лицо скрыто
+PROFILES["q38_cover_ugc"] = {**_QV, "out": (1080, 1440), "min_aspect": 1.2, "ref": [],
+    "weights": {"ref": 0.0, "text": 0.5, "ugc": 0.5}, "ugc_floor": 0.3,
+    "anchors": ["a casual iPhone mirror selfie of a young woman showing her everyday outfit, phone covering her face, "
+                "bedroom or hallway mirror, natural light, amateur phone photo, not a photoshoot",
+                "a candid phone photo of a girl's outfit taken by a friend, face turned away or cropped, everyday street"],
+    "queries": ["outfit mirror selfie", "fit check mirror selfie", "ootd mirror selfie", "mirror selfie outfit aesthetic",
+                "cozy outfit mirror selfie", "mirror pic outfit phone covering face", "outfit inspo mirror pic",
+                "elevator mirror selfie outfit", "bedroom mirror selfie outfit", "casual outfit mirror selfie",
+                "fall outfit mirror selfie", "outfit of the day mirror"]}
+
 # 1320 Inspoy «fall outfits»: 9:16; s1 — девушка с парнем (лица видны), s2–s4 — осенний образ в полный рост,
 # селфи в зеркало (лицо за телефоном)
 _FO = {"no_faces": False, "out": (1080, 1920), "min_aspect": 1.3, "related_rounds": 1, "related_seeds": 8,
@@ -481,6 +659,78 @@ PROFILES["fo_s4"] = {**_FO,  # Fall Trench Era
                 "classic trench outfit", "trench coat street style fall", "trench coat jeans outfit", "fall outfit trench coat"]}
 
 # 1322 квиз «цветотип»: свои картинки вместо вырезок из рефа — другие фото тех же звёзд, волосы, глаза, запястья
+# 1385: «prime» советы (реф @tips.with.alex), живые фото с телефона; A — девушки ~20, B — женщины 35–50
+_PR = {"no_faces": False, "out": (1080, 1440), "min_aspect": 1.15, "related_rounds": 1, "related_seeds": 8,
+       "weights": {"ref": 0.0, "text": 0.55, "ugc": 0.45}, "min_ref": 0.0, "ref": [], "max_text_chars": 30, "ugc_floor": 0.3}
+PROFILES["pa_s1"] = {**_PR,  # обложка: яркое фото девушки ~20 в цветной одежде (не серой)
+    "anchors": ["a bright candid phone selfie of a smiling young woman in her early twenties wearing a colorful outfit",
+                "a vibrant mirror selfie of a stylish 20 year old girl in a red or pink outfit, sunny day",
+                "a young woman in a bright colorful top laughing outside, iphone photo"],
+    "queries": ["colorful outfit selfie", "bright outfit mirror selfie", "red outfit selfie girl", "pink outfit aesthetic girl",
+                "colorful street style girl", "golden hour selfie girl", "it girl aesthetic photo", "fall outfit selfie colorful",
+                "girl in red sweater selfie", "burgundy outfit mirror selfie", "colorful fit check", "happy girl selfie aesthetic"]}
+PROFILES["pa_s2"] = {**_PR,  # sleep like it's your job: девушка спит / уютная кровать, вечер
+    "anchors": ["a young woman sleeping peacefully in a cozy bed with white sheets, phone photo",
+                "a girl asleep in bed at night wearing a silk sleep mask, soft lamp light"],
+    "queries": ["sleeping girl aesthetic", "girl asleep in bed", "cozy bed sleeping aesthetic", "sleep mask aesthetic girl",
+                "bedtime routine aesthetic", "girl sleeping white sheets", "night routine in bed", "early night aesthetic"]}
+PROFILES["pa_s3"] = {**_PR,  # stop saving, start doing: девушка делает то, что сохраняла (готовит, лепит, рисует)
+    "anchors": ["a young woman baking at home, candid phone photo", "a girl at a pottery class making a bowl",
+                "a young woman painting on a canvas at home", "a girl cooking a new recipe in her kitchen"],
+    "queries": ["girl baking aesthetic", "pottery class aesthetic girl", "painting hobby aesthetic girl", "cooking aesthetic girl",
+                "girl trying new recipe", "new hobby aesthetic", "girl journaling aesthetic", "girl doing pilates aesthetic"]}
+PROFILES["pa_s4"] = {**_PR,  # decide who you are before you walk out: уверенный образ, зеркало перед выходом
+    "anchors": ["a confident young woman mirror selfie in a stylish outfit before going out",
+                "a stylish girl walking out the front door in a put-together outfit, phone photo"],
+    "queries": ["outfit mirror selfie", "ootd mirror selfie girl", "going out outfit mirror", "fit check mirror girl",
+                "outfit of the day aesthetic girl", "stylish girl leaving apartment", "chic outfit mirror selfie", "fall fit check"]}
+PROFILES["pb_s1"] = {**_PR,  # обложка B: яркое фото элегантной женщины 35–50 в цветной одежде
+    "anchors": ["an elegant woman in her forties smiling in a bright colorful outfit, candid phone photo",
+                "a stylish woman over 40 in a red coat on a sunny street"],
+    "queries": ["stylish woman over 40", "women over 40 fashion", "chic woman 40s street style", "colorful outfit woman over 40",
+                "woman over 50 style", "elegant woman red coat", "french woman style over 40", "mature woman colorful style",
+                "woman 40s outfit inspo", "confident woman over 40 smiling"]}
+PROFILES["pb_s2"] = {**_PR,  # stand like you belong there: уверенная осанка, идёт по городу / входит в зал
+    "anchors": ["a confident woman in her forties walking with great posture in the city",
+                "an elegant woman walking into a room with her shoulders back and chin level"],
+    "queries": ["confident woman walking city", "elegant woman walking street", "woman walking street style 40s",
+                "power walk woman", "woman good posture", "chic woman walking", "businesswoman walking", "woman walking in coat"]}
+PROFILES["pb_s3"] = {**_PR, "no_faces": True,  # stop buying random pieces: капсульный гардероб, мало вещей, всё сочетается
+    "anchors": ["a capsule wardrobe of a few neutral pieces on a clothing rack", "a woman's closet with a few curated outfits"],
+    "queries": ["capsule wardrobe rack", "capsule wardrobe closet", "minimalist wardrobe aesthetic", "clothing rack neutral",
+                "capsule wardrobe aesthetic", "minimal closet aesthetic", "neutral wardrobe rack", "curated closet"]}
+PROFILES["pb_s4"] = {**_PR, "no_faces": True,  # plan your week on sunday: образы на неделю на кровати + обувь и сумки
+    "anchors": ["several outfits for the week laid out on a bed with shoes and bags", "outfit planning on a bed, clothes shoes and bag"],
+    "queries": ["outfits laid out on bed", "weekly outfit planning", "outfit flat lay on bed", "outfits for the week",
+                "outfit planning bed", "outfit laid out with shoes and bag", "week of outfits", "planning outfits aesthetic"]}
+# 1385 B, добор: другие запросы (первые дали повторы)
+PROFILES["pb_s1x"] = {**PROFILES["pb_s1"], "queries": [
+    "mom outfit colorful", "40 year old woman outfit", "stylish mom street style", "woman in her 40s red dress",
+    "colorful blazer woman outfit", "pink coat outfit woman", "bright knit sweater outfit woman", "parisian chic woman 45",
+    "milan street style woman colorful", "older woman fashion inspo", "chic over 40 outfit", "fashionable mom selfie",
+    "woman 50 fashion colorful", "silver hair woman street style", "classy woman colorful coat", "yellow dress woman street"]}
+PROFILES["pb_s2x"] = {**PROFILES["pb_s2"], "queries": [
+    "woman walking confidently", "chic woman walking paris", "woman entering restaurant", "elegant woman street walking blazer",
+    "woman walking trench coat city", "confident woman street style 35", "woman walking office building",
+    "woman walking in heels city", "mom walking street style", "woman walking milan"]}
+PROFILES["pb_s3x"] = {**PROFILES["pb_s3"], "queries": [
+    "neat closet aesthetic", "organized wardrobe aesthetic", "capsule closet hangers", "wardrobe minimal aesthetic",
+    "closet organization aesthetic", "clothes rail aesthetic", "walk in closet neutral", "capsule wardrobe 2024"]}
+# 1383: осенние коллажи образов на белом (как доски @aiyah.777 из 1345): вещи без модели, без надписей
+PROFILES["ob_fall"] = {"no_faces": True, "out": (900, 1200), "min_aspect": 1.0, "related_rounds": 1, "related_seeds": 8,
+    "weights": {"ref": 0.35, "text": 0.65, "ugc": 0.0}, "min_ref": 0.0, "ugc_floor": 0.0, "max_text_chars": 6,
+    "keep_full": True, "ref": sorted((ROOT / "downloads" / "inspoy_found" / "ref" / "boards").glob("ref_*.jpg")),
+    "anchors": [
+        "a fall outfit collage of clothing items on a plain white background: knit sweater, jeans, boots and a bag",
+        "an autumn outfit flat lay on white with a coat, cozy sweater, trousers, ankle boots and gold jewelry",
+        "a pinterest outfit board with fall clothes, shoes and accessories cut out on a white background",
+    ],
+    "queries": [
+        "fall outfit collage", "autumn outfit collage", "fall outfit inspo collage", "fall outfits polyvore",
+        "autumn outfit board", "fall capsule outfits collage", "cozy fall outfit ideas collage",
+        "fall outfit flat lay white background", "autumn aesthetic outfit collage", "fall fits collage",
+        "outfit shuffle fall", "fall outfit layout", "autumn outfit inspiration board", "fall outfit moodboard clothes",
+    ]}
 _CQ = {"no_faces": False, "out": (900, 1200), "min_aspect": 1.0, "related_rounds": 0, "related_seeds": 0,
        "weights": {"ref": 0.0, "text": 0.9, "ugc": 0.1}, "min_ref": 0.0, "ref": [], "ugc_floor": 0.0,
        "max_text_chars": 6, "keep_full": True}
@@ -504,6 +754,7 @@ CQ2_STARS = {
     "card_5": ["Dakota Johnson", "Olivia Wilde", "Natalie Portman", "Caitriona Balfe"],          # true summer
     "card_6": ["Elle Fanning", "Dakota Fanning", "Gwyneth Paltrow", "Naomi Watts", "Reese Witherspoon"],  # light
     "card_7": ["Jennifer Aniston", "Sarah Jessica Parker", "Bella Hadid", "Zoe Saldana"],      # soft summer
+    "1384": ["Liv Tyler", "Mindy Kaling", "Emma Watson", "Kendall Jenner"],   # 1384: звёзды из ТЗ, которых не было
 }
 for _slot, _names in CQ2_STARS.items():
     for _n in _names:
@@ -512,7 +763,132 @@ for _slot, _names in CQ2_STARS.items():
             "anchors": [f"a studio headshot portrait of {_n}, face and shoulders, plain background, looking at the camera"],
             "queries": [f"{_l} headshot", f"{_l} portrait", f"{_l} photoshoot", f"{_l} studio portrait",
                         f"{_l} close up", f"{_l} photocall", f"{_l} face", f"{_l} beauty shoot"]}
-for _k, _c in {"blue": "light blue", "brown": "dark brown", "green": "green", "hazel": "hazel"}.items():
+# 1384 обложки: свежие (2025–2026) эстетичные фото звёзд из ТЗ — кампании, эдиториалы, как в фидбеке
+# (Dior Cruise 2027 с Jennifer Lawrence, Bella Hadid 2026); старые фото 2010-х не нужны
+CV26_STARS = ["Megan Fox", "Liv Tyler", "Lucy Liu", "Lily Collins", "Margot Robbie", "Mindy Kaling", "Emma Watson",
+              "Blake Lively", "Amy Adams", "Jennifer Aniston", "Jennifer Lopez", "Kendall Jenner"]
+for _n in CV26_STARS:
+    _l = _n.lower()
+    PROFILES["cv26_" + _l.replace(" ", "_")] = {**_CQ, "min_aspect": 1.15, "max_text_chars": 12,
+        "anchors": [f"a 2026 high fashion campaign photo of {_n}, modern editorial, natural makeup, soft light, "
+                    f"elegant, sharp high quality magazine photo",
+                    f"{_n} in a recent luxury brand campaign, aesthetic editorial portrait, 2026"],
+        "queries": [f"{_l} 2026", f"{_l} 2026 photoshoot", f"{_l} campaign 2026", f"{_l} editorial 2026",
+                    f"{_l} 2025 photoshoot", f"{_l} vogue 2026", f"{_l} aesthetic 2026", f"{_l} magazine cover 2026",
+                    f"{_l} campaign", f"{_l} editorial"]}
+# 1384 обложки, раунд 2: конкретные профессиональные съёмки 2024–2026 (кампании брендов, обложки журналов) —
+# названия из веб-поиска 2026-10-30; пользователь одобрил только кампании уровня Donna Karan FW26
+CVPRO = {
+    "kendall_jenner": ["kendall jenner donna karan campaign", "kendall jenner donna karan fall 2026",
+                       "kendall jenner khaite campaign", "kendall jenner vogue france 2026",
+                       "kendall jenner burberry campaign", "kendall jenner campaign 2026 editorial"],
+    "margot_robbie": ["margot robbie british vogue 2026", "margot robbie vogue australia 2026", "margot robbie chanel campaign",
+                      "margot robbie chanel 2026", "margot robbie v magazine 2026", "margot robbie wuthering heights photoshoot"],
+    "megan_fox": ["megan fox photoshoot 2026", "megan fox amber asaly", "megan fox editorial 2025",
+                  "megan fox magazine photoshoot", "megan fox campaign"],
+    "blake_lively": ["blake lively vogue september 2024", "blake lively baz luhrmann vogue", "blake lively blake brown campaign",
+                     "blake lively editorial 2025", "blake lively vogue photoshoot"],
+    "lily_collins": ["lily collins zalando campaign", "lily collins zalando 2026", "lily collins lancome campaign",
+                     "lily collins emily in paris season 5 photoshoot", "lily collins editorial 2025"],
+    "jennifer_lopez": ["jennifer lopez instyle 2025", "jennifer lopez interview magazine brianna capozzi",
+                       "jennifer lopez jlo beauty campaign", "jennifer lopez vogue mexico", "jennifer lopez editorial 2025"],
+    "jennifer_aniston": ["jennifer aniston elle 2025", "jennifer aniston harpers bazaar 2025", "jennifer aniston vanity fair 2025",
+                         "jennifer aniston lolavie campaign", "jennifer aniston editorial 2025"],
+    "emma_watson": ["emma watson miu miu", "emma watson vogue photoshoot", "emma watson lancome campaign",
+                    "emma watson editorial", "emma watson 2025"],
+    "amy_adams": ["amy adams s magazine 2026", "amy adams nino munoz", "amy adams cultured magazine",
+                  "amy adams daniel jack lyons", "amy adams editorial 2026"],
+    "lucy_liu": ["lucy liu modern luxury 2026", "lucy liu moynat campaign", "lucy liu vogue singapore",
+                 "lucy liu v magazine china", "lucy liu editorial 2025"],
+    "liv_tyler": ["liv tyler g-star campaign", "liv tyler g-star raw 2026", "liv tyler the rake", "liv tyler editorial 2025",
+                  "liv tyler campaign"],
+    "mindy_kaling": ["mindy kaling bustle 2026", "mindy kaling christian soria", "mindy kaling vogue india",
+                     "mindy kaling editorial 2025", "mindy kaling photoshoot 2026"],
+}
+for _k, _q in CVPRO.items():
+    _n = _k.replace("_", " ").title()
+    PROFILES["cvpro_" + _k] = {**_CQ, "min_aspect": 1.15, "max_text_chars": 12,
+        "anchors": [f"a professional luxury fashion campaign photo of {_n} by a top photographer, magazine editorial, "
+                    f"sharp high resolution, elegant styling, natural makeup"],
+        "queries": _q}
+# 1387 Inspoy «my ex invited me to his birthday»: 3:4; s1 яркое эмоциональное селфи (база для Flow), s2 подруга
+# подбирает образы (POV), s3–s5 яркие образы — селфи в зеркале, лицо закрыто телефоном (из Pinterest как есть)
+_EX = {"no_faces": False, "out": (1080, 1440), "min_aspect": 1.15, "related_rounds": 1, "related_seeds": 8,
+       "weights": {"ref": 0.0, "text": 0.7, "ugc": 0.3}, "min_ref": 0.0, "ref": [], "max_text_chars": 30,
+       "keep_full": True}
+PROFILES["ex_s1"] = {**_EX,
+    "anchors": ["a bright emotional phone selfie of a pretty young woman, shocked surprised face, hand on her cheek, "
+                "colorful outfit, sunny vivid colors, close up",
+                "a candid excited selfie of a girl with wide eyes and open mouth, bright saturated colors"],
+    "queries": ["shocked selfie girl", "surprised face selfie aesthetic", "omg face selfie", "emotional selfie girl",
+                "bright selfie aesthetic", "shocked girl aesthetic", "colorful selfie girl", "surprised girl selfie",
+                "excited selfie girl", "girl gasping selfie"]}
+PROFILES["ex_s2"] = {**_EX, "no_faces": True,
+    "anchors": ["first person view of a best friend holding up bright colorful dresses and outfits in front of an open "
+                "wardrobe, clothes on hangers, bedroom, candid phone photo",
+                "girls choosing outfits, colorful clothes laid out on the bed and hanging, pov photo"],
+    "queries": ["friend picking outfit", "choosing outfit with best friend", "getting ready with best friend",
+                "girls trying on clothes", "outfit choosing bedroom aesthetic", "holding dress hanger aesthetic",
+                "what should i wear aesthetic", "clothes on bed getting ready", "best friend styling me",
+                "trying outfits with friends"]}
+PROFILES["ex_s1b"] = {**_EX, "max_text_chars": 12,   # добор для s1: эстетичные селфи с эмоцией «😳», дорого и светло
+    "anchors": ["an aesthetic iPhone selfie of a beautiful young woman with a surprised shocked expression, wide eyes, "
+                "parted lips, hand near her face, soft natural daylight, clean bright background, high quality",
+                "a pretty girl gasping in a candid selfie, eyebrows raised, glowing skin, bright airy room, pinterest aesthetic"],
+    "queries": ["surprised selfie aesthetic", "shocked selfie aesthetic girl", "omg selfie aesthetic", "gasp selfie girl",
+                "hand over mouth selfie aesthetic", "surprised face aesthetic pinterest", "shocked girl pinterest selfie",
+                "selfie surprised expression natural light", "wide eyes selfie aesthetic", "pretty girl shocked face",
+                "that girl selfie surprised", "clean girl selfie surprised"]}
+PROFILES["ex_s1c"] = {**_EX, "max_text_chars": 12,   # s1, раунд 3: шок с открытым ртом, взгляд в камеру, по плечи
+    "anchors": ["a gorgeous slim young woman taking a selfie, looking straight into the camera, shocked with her mouth "
+                "wide open in a gasp, eyebrows raised, head and shoulders in frame, bright aesthetic room, natural light",
+                "a beautiful model-like girl with a jaw-drop shocked expression in a bright selfie, looking at the lens"],
+    "queries": ["shocked selfie model", "jaw drop selfie girl", "gasp selfie pretty girl", "shocked face selfie aesthetic",
+                "surprised selfie beautiful girl", "omg face pretty girl", "shocked expression woman selfie",
+                "mouth open shocked selfie", "shocked reaction selfie aesthetic", "surprised face model photoshoot",
+                "shocked girl looking at camera", "pretty girl shocked selfie bedroom"]}
+_EX_LOOK = {**_EX, "no_faces": True, "min_aspect": 1.2, "max_text_chars": 12}
+PROFILES["ex_fine"] = {**_EX_LOOK,
+    "anchors": ["a full length mirror selfie of a woman in a bright casual outfit, colorful knit sweater and jeans, "
+                "phone covering her face, cute effortless look",
+                "mirror selfie casual bright outfit, colorful cardigan, face hidden by the phone"],
+    "queries": ["bright casual outfit mirror selfie", "colorful casual outfit mirror", "cute casual outfit mirror selfie",
+                "colorful knit outfit mirror selfie", "bright outfit mirror pic", "casual chic colorful outfit",
+                "colorful cardigan outfit mirror", "pink casual outfit mirror selfie", "green outfit mirror selfie",
+                "blue outfit mirror selfie"]}
+PROFILES["ex_better"] = {**_EX_LOOK,
+    "anchors": ["a full length mirror selfie of a woman in a bold stylish bright outfit, colored blazer or satin set, "
+                "heels, phone covering her face, confident chic look",
+                "mirror selfie of a striking colorful two piece set, statement outfit, face hidden by the phone"],
+    "queries": ["bold colorful outfit mirror selfie", "bright blazer outfit mirror", "colorful two piece set mirror selfie",
+                "statement outfit mirror selfie", "chic bright outfit mirror", "red outfit mirror selfie",
+                "satin skirt outfit mirror selfie", "colorful going out outfit mirror", "bright suit outfit mirror",
+                "cobalt blue outfit mirror selfie"]}
+PROFILES["ex_who"] = {**_EX_LOOK,
+    "anchors": ["a full length mirror selfie of a woman in a show-stopping bright party dress, red or hot pink mini "
+                "dress, heels, phone covering her face, glamorous birthday party look",
+                "mirror selfie stunning bright satin or sequin dress, night out look, face hidden by the phone"],
+    "queries": ["red dress mirror selfie", "hot pink dress mirror selfie", "party dress mirror selfie",
+                "sequin dress mirror selfie", "birthday outfit mirror selfie", "bright mini dress mirror",
+                "night out dress mirror selfie", "satin dress mirror selfie", "glam dress mirror pic",
+                "baddie dress mirror selfie"]}
+# 1342 квиз «какой цвет волос тебе идёт» (концепт 1322): звёзды с узнаваемым цветом волос; эры с другим цветом
+# отсеиваем вручную при отборе
+HC_STARS = {
+    "ash blonde": ["Cara Delevingne", "Rosie Huntington-Whiteley", "Elsa Hosk", "Gwen Stefani"],
+    "golden brown": ["Jennifer Lopez", "Jessica Alba", "Alessandra Ambrosio", "Gisele Bundchen"],
+    "soft espresso": ["Lucy Hale", "Selena Gomez", "Kendall Jenner", "Mila Kunis"],
+    "copper": ["Emma Stone", "Isla Fisher", "Karen Gillan", "Sophie Turner"],
+}
+for _hc, _names in HC_STARS.items():
+    for _n in _names:
+        _l = _n.lower()
+        PROFILES["hc_" + _l.replace(" ", "_").replace("-", "_")] = {**_CQ, "min_aspect": 0.7, "max_text_chars": 8,
+            "anchors": [f"a studio headshot portrait of {_n} with {_hc} hair, face and shoulders, plain background, looking at the camera"],
+            "queries": [f"{_l} {_hc} hair", f"{_l} headshot", f"{_l} portrait", f"{_l} {_hc} hair color",
+                        f"{_l} photoshoot", f"{_l} close up", f"{_l} beauty shoot", f"{_l} hair"]}
+for _k, _c in {"blue": "light blue", "brown": "dark brown", "green": "green", "hazel": "hazel",
+               "dark": "very dark brown, almost black"}.items():
     PROFILES[f"cq_eyes2_{_k}"] = {**_CQ, "out": (900, 900), "min_aspect": 0.3,
         "anchors": [f"a close up of a woman's face showing both {_c} eyes and eyebrows, horizontal crop, natural light"],
         "queries": [f"{_k} eyes close up both eyes", f"{_k} eyes face close up", f"{_c} eyes woman close up",
@@ -575,6 +951,170 @@ PROFILES["gh_s5"] = {**_GH,  # Husband #7 — сейчас: эффектный �
                 "chic modern evening outfit mirror selfie: little black dress, statement earrings, heels"],
     "queries": ["date night outfit mirror selfie", "red dress outfit", "glamorous outfit mirror pic", "satin dress outfit",
                 "little black dress outfit", "evening outfit fit check", "classy date outfit", "elegant night out outfit"]}
+
+# 1328 Inspoy «my grandpa has been married to the same woman for 52 years»: 3:4; s1 внучка с дедушкой, s2 дедушка у
+# шкафа, s3–s5 образы «Year 1 / 25 / 52» (70-е, конец 90-х, сейчас) — все «как на первое свидание», селфи в зеркало
+_GP = {**_GH}
+PROFILES["gp_s1"] = {**_GP,  # девушка с дедушкой, тёплое фото вдвоём
+    "anchors": ["a young woman and her sweet stylish grandfather taking a selfie together, both smiling, cozy casual phone photo",
+                "granddaughter hugging her grandpa at home, warm candid phone photo"],
+    "queries": ["me and my grandpa", "grandpa and granddaughter selfie", "granddaughter grandfather aesthetic",
+                "grandpa selfie aesthetic", "my grandpa and me photo", "grandfather granddaughter photo ideas",
+                "grandpa hug aesthetic", "cool grandpa photo", "stylish grandpa", "grandpa and me"]}
+PROFILES["gp_s2"] = {**_GP,  # дедушка у шкафа показывает на вещи
+    "anchors": ["a stylish elderly man with grey hair standing at an open wardrobe, pointing at clothes and smiling",
+                "a dapper grandfather holding up a dress or jacket from a closet at home"],
+    "queries": ["stylish grandpa closet", "old man wardrobe", "dapper old man style", "grandfather closet aesthetic",
+                "stylish older man wardrobe", "grandpa fashion", "old gentleman style home", "grandpa choosing clothes",
+                "elderly man fashion icon", "vintage closet grandpa"]}
+PROFILES["gp_s3"] = {**_GP,  # Year 1 — 70-е: свидание
+    "anchors": ["a young woman taking a mirror selfie in a 1970s inspired date outfit: flared jeans, suede jacket, platform shoes",
+                "70s style outfit mirror selfie: wide collar blouse, high waisted flares, suede bag"],
+    "queries": ["70s outfit mirror selfie", "70s inspired outfit", "flared jeans outfit", "suede jacket outfit",
+                "70s fashion aesthetic women", "retro 70s fit check", "boho 70s outfit", "70s date outfit"]}
+PROFILES["gp_s4"] = {**_GP,  # Year 25 — конец 90-х: свидание
+    "anchors": ["a young woman taking a mirror selfie in a late 1990s date outfit: slip dress over a fitted tee, cardigan, platform sandals",
+                "90s date night outfit mirror selfie: satin slip dress, baby tee, small shoulder bag"],
+    "queries": ["90s date outfit", "90s slip dress outfit", "late 90s fashion outfit", "90s outfit mirror selfie",
+                "90s aesthetic outfit women", "slip dress cardigan outfit", "90s going out outfit", "90s fit check"]}
+PROFILES["gp_s5"] = {**_GP,  # Year 52 — сейчас: свидание
+    "anchors": ["a young woman taking a mirror selfie in a chic modern date night outfit: elegant midi dress, heels, small bag",
+                "modern classy date outfit mirror selfie: satin skirt, fitted top, statement earrings"],
+    "queries": ["date night outfit mirror selfie", "classy date outfit", "elegant date night outfit", "satin skirt outfit",
+                "chic dinner outfit", "date night fit check", "elegant midi dress outfit", "first date outfit"]}
+
+# 1322 партия 301–600: ни одного фото из сданных — новые звёзды тех же цветотипов (по цветотип-блогам, субъективно),
+# студийные портреты / эдиториалы крупно; волосы и глаза — новые запросы (повторы с 1322_lib отсеиваем по dHash)
+CQ3_STARS = {
+    "winter": ["Jennifer Connelly", "Courteney Cox", "Zooey Deschanel", "Dita Von Teese"],
+    "spring": ["Cameron Diaz", "Kate Hudson", "Amanda Seyfried", "Sydney Sweeney"],
+    "summer": ["Charlize Theron", "Rosie Huntington-Whiteley", "Cara Delevingne", "Kate Bosworth"],
+    "autumn": ["Eva Mendes", "Jessica Alba", "Gisele Bundchen", "Drew Barrymore"],
+    "card_5": ["Rachel Weisz", "Brooke Shields", "Kirsten Dunst"],          # true summer
+    "card_6": ["Elsa Hosk", "Anya Taylor-Joy", "Michelle Williams"],        # light summer
+    "card_7": ["Hailey Bieber", "Kate Moss", "Gigi Hadid"],                 # soft summer
+}
+for _slot, _names in CQ3_STARS.items():
+    for _n in _names:
+        _l = _n.lower()
+        PROFILES["cq3_" + _l.replace(" ", "_").replace("-", "_")] = {**_CQ, "min_aspect": 0.7, "max_text_chars": 8,
+            "anchors": [f"a studio headshot portrait of {_n}, face and shoulders, plain background, looking at the camera",
+                        f"a recent high quality editorial portrait of {_n}, soft light, natural makeup"],
+            "queries": [f"{_l} headshot", f"{_l} portrait", f"{_l} photoshoot", f"{_l} studio portrait",
+                        f"{_l} close up", f"{_l} beauty shoot", f"{_l} editorial", f"{_l} 2025 photoshoot",
+                        f"{_l} campaign"]}
+_CQ3_HAIR = {"ginger": ["ginger hair back view", "copper red hair from behind", "red hair waves back", "auburn hair aesthetic",
+                        "strawberry copper hair", "ginger hair inspo back"],
+             "brown": ["brunette hair back view", "brown hair waves from behind", "chestnut hair aesthetic",
+                       "chocolate brown hair back", "glossy brown hair", "brunette blowout back"],
+             "blonde": ["blonde hair back view", "honey blonde hair from behind", "golden blonde waves back",
+                        "buttery blonde hair", "blonde blowout back", "blonde hair inspo back"],
+             "black": ["black hair back view", "jet black hair from behind", "long black hair waves back",
+                       "glossy black hair", "black hair aesthetic back", "raven hair long"]}
+for _k, _q in _CQ3_HAIR.items():
+    PROFILES[f"cq3_hair_{_k}"] = {**_CQ, "no_faces": True, "out": (900, 900), "min_aspect": 0.8,
+        "anchors": [f"long {_CQ_HAIR[_k]} hair seen from behind, close up of the hair, no face"], "queries": _q}
+for _k, _c in {"blue": "light blue", "brown": "dark brown", "green": "green", "hazel": "hazel"}.items():
+    PROFILES[f"cq3_eyes_{_k}"] = {**_CQ, "out": (900, 900), "min_aspect": 0.3,
+        "anchors": [f"a close up of a woman's face showing both {_c} eyes and eyebrows, horizontal crop, natural light"],
+        "queries": [f"{_c} eyes close up", f"both {_k} eyes close up", f"{_k} eyes eyebrows macro", f"{_k} eyes no makeup close up",
+                    f"{_k} eyes freckles close up", f"{_k} eyes photography", f"{_k} eyes model close up",
+                    f"woman with {_k} eyes close up"]}
+
+# добор глаз для партии 301–600: простые слова, как ищут люди (отбор глазами, только оба глаза)
+for _k in ("blue", "brown", "hazel", "green"):
+    PROFILES[f"cq4_eyes_{_k}"] = {**_CQ, "out": (900, 900), "min_aspect": 0.3,
+        "anchors": [f"a close up of a woman's face showing both {_k} eyes and eyebrows, horizontal crop"],
+        "queries": [f"{_k} eyes", f"{_k} eyes aesthetic", f"{_k} eyes girl", f"pretty {_k} eyes", f"{_k} eyed girl"]}
+
+# 1322 партия 601–900 («визуально новее»): снова ни одной звезды из прошлых библиотек (CQ, CQ2, CQ3) — новые звёзды
+# тех же цветотипов (по цветотип-блогам, субъективно); волосы и глаза — новые запросы, повторы отсеиваем по dHash
+CQ5_STARS = {
+    "winter": ["Katy Perry", "Selena Gomez", "Krysten Ritter", "Sandra Bullock"],
+    "spring": ["Jennifer Lawrence", "Sabrina Carpenter", "Kate Upton", "Nicole Kidman"],
+    "summer": ["Emilia Clarke", "Rose Byrne", "Kristen Bell", "Lily James"],
+    "autumn": ["Isla Fisher", "Eva Longoria", "Penelope Cruz", "Shakira"],
+    "card_5": ["Rachel McAdams", "Jennifer Garner", "Kristen Stewart"],    # true summer
+    "card_6": ["Claire Danes", "Carey Mulligan", "Sienna Miller"],         # light summer
+    "card_7": ["Olivia Palermo", "Mila Kunis", "Jessica Biel"],            # soft summer
+}
+for _slot, _names in CQ5_STARS.items():
+    for _n in _names:
+        _l = _n.lower()
+        PROFILES["cq5_" + _l.replace(" ", "_").replace("-", "_")] = {**_CQ, "min_aspect": 0.7, "max_text_chars": 8,
+            "anchors": [f"a studio headshot portrait of {_n}, face and shoulders, plain background, looking at the camera",
+                        f"a recent high quality editorial portrait of {_n}, soft light, natural makeup"],
+            "queries": [f"{_l} headshot", f"{_l} portrait", f"{_l} photoshoot", f"{_l} studio portrait",
+                        f"{_l} close up", f"{_l} beauty shoot", f"{_l} editorial", f"{_l} 2025 photoshoot",
+                        f"{_l} campaign"]}
+_CQ5_HAIR = {"ginger": ["red hair from the back", "copper hair color", "ginger curls back", "natural red hair long",
+                        "auburn balayage back", "strawberry blonde hair back"],
+             "brown": ["brown hair from the back", "mocha brown hair", "brunette long layers back", "brown curly hair back",
+                       "espresso brown hair", "brunette balayage back"],
+             "blonde": ["blonde hair from the back", "platinum blonde long hair", "vanilla blonde waves", "blonde curls back",
+                        "beige blonde hair", "sandy blonde hair back"],
+             "black": ["black hair from the back", "black curly hair back", "sleek black hair long", "black wavy hair back",
+                       "blue black hair", "black hair blowout back"]}
+for _k, _q in _CQ5_HAIR.items():
+    PROFILES[f"cq5_hair_{_k}"] = {**_CQ, "no_faces": True, "out": (900, 900), "min_aspect": 0.8,
+        "anchors": [f"long {_CQ_HAIR[_k]} hair seen from behind, close up of the hair, no face"], "queries": _q}
+for _k, _c in {"blue": "blue", "brown": "brown", "green": "green", "hazel": "hazel"}.items():
+    PROFILES[f"cq5_eyes_{_k}"] = {**_CQ, "out": (900, 900), "min_aspect": 0.3,
+        "anchors": [f"a close up of a woman's face showing both {_c} eyes and eyebrows, horizontal crop, looking at the camera"],
+        "queries": [f"{_c} eyes model", f"{_c} eyes portrait close up", f"{_c} eyes makeup look", f"{_c} eyes natural beauty",
+                    f"{_c} eyes face crop", f"beautiful {_c} eyes woman", f"{_c} eyes editorial"]}
+
+# 1389 «top 5 websites to cure your boredom»: фон — фактура воды (как в рефе @farahzzrs: зеленоватая рябь с бликами), без людей
+PROFILES["bg_water"] = {"no_faces": True, "out": (1080, 1350), "min_aspect": 0.9, "related_rounds": 0, "related_seeds": 0,
+    "weights": {"ref": 0.5, "text": 0.4, "ugc": 0.1}, "min_ref": 0.0, "ugc_floor": 0.0, "max_text_chars": 2, "keep_full": True,
+    "ref": [ROOT / "downloads" / "1389" / "ref" / "slide2.jpg"],
+    "anchors": ["a close-up of rippling clear water surface with sunlight reflections, green turquoise water texture, full frame, no objects"],
+    "queries": ["water texture", "water aesthetic", "pool water texture", "water ripples", "green water aesthetic",
+                "sea water texture", "water background", "sparkling water aesthetic", "lake water texture", "clear water ripples"]}
+
+# 1391 (видео-версия 1389, 9:16): новый фон вместо воды — небо с облаками; ref нужен только конструктору (вес 0)
+PROFILES["bg_sky"] = {"no_faces": True, "out": (1080, 1920), "min_aspect": 1.4, "related_rounds": 0, "related_seeds": 0,
+    "weights": {"ref": 0.0, "text": 0.75, "ugc": 0.25}, "min_ref": 0.0, "ugc_floor": 0.0, "max_text_chars": 2, "keep_full": True,
+    "ref": [ROOT / "downloads" / "1389" / "ref" / "slide2.jpg"],
+    "anchors": ["a dreamy blue sky full of soft white fluffy clouds, full frame, no ground, no buildings, no people"],
+    "queries": ["sky aesthetic", "clouds aesthetic", "blue sky clouds", "cloud wallpaper", "aesthetic clouds",
+                "sky wallpaper aesthetic", "dreamy clouds", "cotton candy sky", "pastel sky clouds", "fluffy clouds"]}
+
+# 1389b «top 5 things to do when you're bored»: фото на экран iMac (16:9) для шуточных слайдов 1–3
+_B89 = {"out": (1360, 766), "min_aspect": 0.4, "related_rounds": 0, "related_seeds": 0,
+        "weights": {"ref": 0.0, "text": 0.75, "ugc": 0.25}, "min_ref": 0.0, "ugc_floor": 0.0, "max_text_chars": 2, "keep_full": True,
+        "ref": [ROOT / "downloads" / "1389" / "ref" / "slide2.jpg"]}
+PROFILES["b89_room"] = {**_B89, "no_faces": True,
+    "anchors": ["a cozy bedroom at night lit by a warm lamp, wide shot of the whole room, furniture and bed, no people"],
+    "queries": ["bedroom at night aesthetic", "cozy bedroom night", "dark bedroom aesthetic", "bedroom lamp glow",
+                "bedroom fairy lights night", "room at night aesthetic", "moody bedroom", "late night room aesthetic",
+                "rearranging room", "room makeover night", "messy room aesthetic night", "dorm room night aesthetic"]}
+PROFILES["b89_dog"] = {**_B89, "no_faces": True,
+    "anchors": ["a cute dog at home looking straight at the camera with sad longing eyes, the dog fills the frame"],
+    "queries": ["sad dog aesthetic", "dog waiting by window", "dog looking at camera", "golden retriever aesthetic",
+                "dog with phone", "dog on couch aesthetic", "puppy eyes", "dog in bed aesthetic", "sad puppy face",
+                "dog staring funny", "cute dog at home", "french bulldog aesthetic"]}
+PROFILES["b89_skill"] = {**_B89, "no_faces": False,
+    "anchors": ["a person juggling colorful balls in the air, candid photo", "a person doing a moonwalk dance move, candid photo"],
+    "queries": ["juggling", "juggling balls", "person juggling", "juggling aesthetic", "juggling photography", "juggling oranges",
+                "learning to juggle", "moonwalk dance", "moonwalk", "street performer juggling", "whistling", "man whistling"]}
+
+# 1389b, второй заход: ищем фото покрупнее; у собак вся морда с ушами и носом должна влезать в кадр 16:9
+PROFILES["b89_dog2"] = {**_B89, "no_faces": True,
+    "anchors": ["a whole dog's head with both ears and the entire muzzle in the middle of the photo, free space around it, at home"],
+    "queries": ["dog portrait", "dog smiling at camera", "dog sitting on couch", "dog on bed looking at camera", "cute dog home photo",
+                "dog head tilt", "sad dog", "dog waiting at door", "dog at window", "golden retriever portrait", "corgi face",
+                "dog selfie", "french bulldog face", "labrador portrait", "beagle portrait", "puppy portrait", "dog looking out window",
+                "dog in living room"]}
+PROFILES["b89_room2"] = {**_B89, "no_faces": True,
+    "anchors": ["a cozy bedroom at night lit by lamps and string lights, wide shot of the whole room, sharp photo, no people"],
+    "queries": ["cozy bedroom at night", "bedroom night lamp aesthetic", "night room string lights", "bedroom night city view",
+                "room decor night aesthetic", "bedroom led lights", "apartment at night cozy", "dark cozy room", "night bedroom photo",
+                "studio apartment night", "small bedroom night aesthetic", "cozy room night window"]}
+PROFILES["b89_skill2"] = {**_B89, "no_faces": False,
+    "anchors": ["a person juggling balls or clubs in the air, sharp candid photo"],
+    "queries": ["juggling photo", "juggler street", "juggling clubs", "juggling in park", "juggling at home", "juggling silhouette",
+                "juggler sunset", "juggling hands balls", "juggling beach", "fire juggling", "moonwalk street", "whistling with fingers"]}
 
 UGC_FLOOR = 0.45          # ниже — сток / глянец
 MIN_SHORT_SIDE = 600      # px у оригинала

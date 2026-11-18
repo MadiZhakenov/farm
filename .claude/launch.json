@@ -1,0 +1,80 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "drops-band-tuner",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "tuner_drops_band.py"
+      ],
+      "port": 8765
+    },
+    {
+      "name": "1340-start-tuner",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "tuner_1340_start.py"
+      ],
+      "port": 8766
+    },
+    {
+      "name": "progress-dashboard",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "progress_server.py"
+      ],
+      "port": 8767
+    },
+    {
+      "name": "1380-video-tuner",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "tuner_1380_video.py"
+      ],
+      "port": 8771
+    },
+    {
+      "name": "1380-video-tuner-7s",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "tuner_1380_video.py",
+        "--variant",
+        "7s"
+      ],
+      "port": 8772
+    },
+    {
+      "name": "drops-ghost-tuner",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "tuner_drops_ghost.py"
+      ],
+      "port": 8771
+    },
+    {
+      "name": "onestate3-tuner",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "tuner_onestate3.py"
+      ],
+      "port": 8773,
+      "autoPort": false
+    },
+    {
+      "name": "drops-inspire-tuner",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "tuner_drops_inspire.py"
+      ],
+      "port": 8775
+    },
+    {
+      "name": "drops-ear-tuner",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "tuner_drops_ear.py"
+      ],
+      "port": 8776
+    }
+  ]
+}

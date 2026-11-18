@@ -102,3 +102,13 @@ _test*
 *.heic
 *.heif
 _test_vvic*
+
+# big local tools (Blender, Kimodo)
+tools/
+
+# 18.11: исходники клиентов и рабочие материалы проектов в downloads/ (десятки ГБ видео) — не в git;
+# уже отслеживаемые текстовые списки (grandma/grandpa chats и т.п.) остаются отслеживаемыми
+downloads/*/
+# сцены Blender (десятки МБ)
+*.blend
+*.blend1

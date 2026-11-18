@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Drops: начало песни и смены</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#14161a; --panel:#1e2127; --line:#30353e; --text:#eceef2; --dim:#969dab; --green:#46d38a; --wave:#7f8aa0; --beat:#ffd23f; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui,"Segoe UI",sans-serif; }
+  .wrap { display:grid; grid-template-columns:minmax(0,1fr) 240px; gap:14px; padding:14px; max-width:1300px; margin:auto; }
+  @media (max-width:760px){ .wrap{ grid-template-columns:1fr; } .side{ max-width:260px; } }
+  header { display:flex; gap:14px; align-items:center; padding:12px 14px 0; max-width:1300px; margin:auto; flex-wrap:wrap; }
+  h1 { font-size:17px; margin:0; }
+  #status { margin-left:auto; color:var(--dim); } #status.ok { color:var(--green); }
+  button { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:7px; padding:7px 11px; font:inherit; cursor:pointer; }
+  button:hover { border-color:#566070; }
+  button.play { background:var(--green); color:#10231a; border-color:var(--green); font-weight:700; }
+  canvas { display:block; width:100%; background:#101215; border:1px solid var(--line); border-radius:7px; cursor:col-resize; touch-action:none; }
+  .row { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:10px; }
+  .time { font-size:27px; font-weight:700; font-variant-numeric:tabular-nums; min-width:150px; }
+  .info { color:var(--dim); margin-top:10px; font-variant-numeric:tabular-nums; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+  .chips button { font-variant-numeric:tabular-nums; }
+  .chips button.sel { background:#ffd23f; color:#16181c; border-color:#ffd23f; font-weight:600; }
+  label { color:var(--dim); display:flex; gap:6px; align-items:center; }
+  .hint { color:var(--dim); font-size:12.5px; margin-top:10px; line-height:1.55; }
+  kbd { background:#2a2f38; border-radius:4px; padding:0 5px; font:12px ui-monospace,monospace; color:var(--text); }
+  .phone { width:100%; aspect-ratio:9/16; background:#000; border-radius:10px; overflow:hidden; border:1px solid var(--line); }
+  .phone img { width:100%; height:100%; object-fit:cover; display:block; }
+</style>
+</head>
+<body>
+<header><h1>Drops «inspired to make music»: начало песни и смены слайдов</h1><span id="status">Загрузка…</span></header>
+<div class="wrap">
+  <main>
+    <canvas id="wave" height="230"></canvas>
+    <div class="chips" id="chips"></div>
+    <div class="row">
+      <div class="time" id="time">—</div>
+      <button data-n="-100">−100 мс</button><button data-n="-10">−10</button>
+      <button data-n="10">+10</button><button data-n="100">+100 мс</button>
+      <button id="snap">К ближайшей доле</button>
+    </div>
+    <div class="row">
+      <button class="play" id="play">▶ Как в ролике</button>
+      <button id="stop">■ Стоп</button>
+      <label style="color:#ffd23f;font-weight:600"><input type="checkbox" id="all" checked> двигать все линии вместе (промежутки те же)</label>
+      <label><input type="checkbox" id="click"> щелчок на сменах</label>
+      <button id="undo">↩ Отменить</button>
+      <button id="reset">Вернуть как было</button>
+    </div>
+    <div class="info" id="info"></div>
+    <div class="hint">
+      Выбери кнопку сверху и кликни по волне: выбранная линия встанет туда. Или просто хватай любую линию мышью и тяни. Зелёная — откуда стартует песня, белые — смены слайдов (обложка → cratedrop → drops → radiooooo), красная — конец ролика, жёлтая — выбранная. Двигаешь старт — все смены едут вместе с ним (длительности слайдов те же), потом их можно подвинуть по отдельности; «К ближайшей доле» ставит линию на бит.
+      Всё сохраняется само. <kbd>Пробел</kbd> как в ролике, <kbd>←</kbd> <kbd>→</kbd> 10 мс, <kbd>Shift</kbd> + стрелки 100 мс, <kbd>Tab</kbd> следующая линия, <kbd>Ctrl</kbd>+<kbd>Z</kbd> отменить.
+    </div>
+  </main>
+  <aside class="side"><div class="phone"><img id="slide" alt="Слайд ролика"></div></aside>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const NAMES = ['Начало', 'cratedrop', 'drops', 'radiooooo', 'Конец'];
+const GAP = 0.15;
+let beats = [], hits = [], L = [], defaults = [], sel = 1, buffer = null, pcm = null, ctx = null, playing = null, drag = false, saveTimer = null;
+const undoStack = [];
+const imgs = [...Array(4).keys()].map(i => { const im = new Image(); im.src = '/media/slide/' + i; return im; });
+
+function setStatus(t, ok) { const s = $('#status'); s.textContent = t; s.className = ok ? 'ok' : ''; }
+function save() {
+  clearTimeout(saveTimer); setStatus('Сохраняю…');
+  saveTimer = setTimeout(async () => {
+    const r = await fetch('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ start: +L[0].toFixed(3), cuts: L.slice(1, 4).map(t => +t.toFixed(3)), end: +L[4].toFixed(3) }) });
+    setStatus(r.ok ? 'Сохранено' : 'Не сохранилось', r.ok);
+  }, 200);
+}
+function fit(c) { const w = Math.round(c.clientWidth * devicePixelRatio), h = Math.round(+c.getAttribute('height') * devicePixelRatio); if (c.width !== w || c.height !== h) { c.width = w; c.height = h; c.style.height = h / devicePixelRatio + 'px'; } return [w, h]; }
+function draw() {
+  const c = $('#wave'), [w, h] = fit(c), g = c.getContext('2d'); g.clearRect(0, 0, w, h);
+  if (!pcm) return;
+  const dur = buffer.duration, n = pcm.length / w, dp = devicePixelRatio;
+  g.fillStyle = 'rgba(70,211,138,.12)'; g.fillRect(L[0] / dur * w, 0, (L[4] - L[0]) / dur * w, h);
+  g.fillStyle = '#7f8aa0';
+  for (let x = 0; x < w; x++) {
+    let lo = 0, hi = 0; const a = Math.floor(x * n), b = Math.floor(a + n);
+    for (let i = a; i < b; i += Math.max(1, Math.floor(n / 50))) { const v = pcm[i]; if (v < lo) lo = v; if (v > hi) hi = v; }
+    g.fillRect(x, h / 2 - hi * h * 1.6, 1, Math.max(1, (hi - lo) * h * 1.6));
+  }
+  beats.forEach((b, i) => { g.fillStyle = '#ffd23f'; const tall = hits[i] > 7 ? 26 : 12; g.fillRect(b / dur * w, h - tall * dp, dp, tall * dp); });
+  g.font = (12 * dp) + 'px system-ui'; g.textAlign = 'center';
+  L.forEach((t, i) => {
+    const x = t / dur * w, on = i === sel;
+    g.fillStyle = on ? '#ffd23f' : i === 0 ? '#46d38a' : i === 4 ? '#ff4d4d' : '#fff';
+    g.fillRect(x - (on ? 1.5 : 1) * dp, 0, (on ? 3 : 2) * dp, h);
+    g.fillText(i === 0 ? 'старт' : i === 4 ? 'конец' : NAMES[i], x, 13 * dp);
+  });
+  if (playing) { g.fillStyle = '#ff4d4d'; g.fillRect(playing.pos / dur * w, 18 * dp, 2 * dp, h); }
+}
+function ui() {
+  $('#time').textContent = L[sel].toFixed(3) + ' с';
+  const box = $('#chips'); box.innerHTML = '';
+  L.forEach((t, i) => { const b = document.createElement('button'); b.textContent = `${NAMES[i]} ${(i ? t - L[0] : t).toFixed(2)}`; if (i === sel) b.className = 'sel'; b.onclick = () => { sel = i; ui(); }; box.append(b); });
+  const d = [...L.slice(1, 5)].map((t, i) => (t - L[i]).toFixed(2));
+  $('#info').textContent = `Длится: обложка ${d[0]} · cratedrop ${d[1]} · drops ${d[2]} · radiooooo ${d[3]} · весь ролик ${(L[4] - L[0]).toFixed(2)} с`;
+  draw();
+}
+function clampSet(i, t) {
+  if (i === 0 || $('#all').checked) { const dl = Math.max(-L[0], Math.min(buffer.duration - L[4], t - L[i])); for (let k = 0; k < 5; k++) L[k] += dl; return; }   // все линии вместе, промежутки те же
+  const lo = i ? L[i - 1] + GAP : 0, hi = i < 4 ? L[i + 1] - GAP : buffer.duration;
+  L[i] = Math.max(lo, Math.min(hi, t));
+}
+function remember() { undoStack.push(L.slice()); if (undoStack.length > 300) undoStack.shift(); }
+function change(t) { stop(); remember(); clampSet(sel, t); ui(); save(); }
+function stop() { if (playing) { try { playing.src.stop(); } catch (e) {} cancelAnimationFrame(playing.raf); playing = null; } $('#slide').src = imgs[0].src; draw(); }
+async function play() {
+  if (!ctx) ctx = new AudioContext(); if (ctx.state === 'suspended') await ctx.resume();
+  stop();
+  const src = ctx.createBufferSource(); src.buffer = buffer; src.connect(ctx.destination);
+  const at = ctx.currentTime + .12, from = L[0], p = L.slice(1, 5).map(t => t - from);
+  src.start(at, from, p[3]);
+  if ($('#click').checked) p.slice(0, 3).forEach(t => { const o = ctx.createOscillator(), g = ctx.createGain(); o.frequency.value = 1800; o.connect(g); g.connect(ctx.destination); const ct = at + t; g.gain.setValueAtTime(.45, ct); g.gain.exponentialRampToValueAtTime(.001, ct + .04); o.start(ct); o.stop(ct + .05); });
+  const run = { src, pos: from, raf: 0 }; playing = run; let cur = -1;
+  const tick = () => {
+    if (playing !== run) return;
+    const t = ctx.currentTime - at - (ctx.outputLatency || 0); run.pos = from + t;
+    let k = 0; for (let i = 0; i < 3; i++) if (t >= p[i]) k = i + 1;
+    if (k !== cur) { cur = k; $('#slide').src = imgs[k].src; }
+    draw();
+    if (t >= p[3]) { stop(); return; }
+    run.raf = requestAnimationFrame(tick);
+  };
+  run.raf = requestAnimationFrame(tick);
+}
+const c = $('#wave');
+const timeAt = e => { const r = c.getBoundingClientRect(); return (e.clientX - r.left) / r.width * buffer.duration; };
+c.addEventListener('pointerdown', e => {
+  if (!pcm) return;
+  const r = c.getBoundingClientRect();
+  let best = -1, bd = 12;
+  L.forEach((t, i) => { const d = Math.abs(r.left + t / buffer.duration * r.width - e.clientX); if (d < bd) { bd = d; best = i; } });
+  stop(); remember();
+  if (best >= 0) sel = best; else clampSet(sel, timeAt(e));
+  drag = true; c.setPointerCapture(e.pointerId); ui(); save();
+});
+c.addEventListener('pointermove', e => { if (drag) { clampSet(sel, timeAt(e)); ui(); } });
+const end = () => { if (drag) { drag = false; save(); } };
+c.addEventListener('pointerup', end); c.addEventListener('pointercancel', end);
+document.querySelectorAll('[data-n]').forEach(b => b.onclick = () => change(L[sel] + (+b.dataset.n) / 1000));
+$('#snap').onclick = () => change(beats.reduce((a, b) => Math.abs(b - L[sel]) < Math.abs(a - L[sel]) ? b : a, 0));
+$('#play').onclick = play; $('#stop').onclick = stop;
+$('#reset').onclick = () => { if (!confirm('Вернуть мои исходные смены?')) return; stop(); remember(); L = defaults.slice(); ui(); save(); };
+function undo() { if (!undoStack.length) return; stop(); L = undoStack.pop(); ui(); save(); }
+$('#undo').onclick = undo;
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') { e.preventDefault(); undo(); return; }
+  const step = e.shiftKey ? .1 : .01;
+  if (e.code === 'Space') { e.preventDefault(); playing ? stop() : play(); }
+  else if (e.code === 'Tab') { e.preventDefault(); sel = (sel + (e.shiftKey ? 4 : 1)) % 5; ui(); }
+  else if (e.code === 'ArrowLeft') { e.preventDefault(); change(L[sel] - step); }
+  else if (e.code === 'ArrowRight') { e.preventDefault(); change(L[sel] + step); }
+});
+window.addEventListener('resize', draw);
+(async () => {
+  const st = await (await fetch('/api/state')).json();
+  beats = st.beats; hits = st.hits; L = [st.start, ...st.cuts, st.end]; defaults = st.defaults;
+  const tmp = new OfflineAudioContext(1, 1, 44100);
+  buffer = await tmp.decodeAudioData(await (await fetch('/media/song')).arrayBuffer());
+  pcm = buffer.getChannelData(0);
+  $('#slide').src = imgs[0].src;
+  ui(); setStatus('Готово', true);
+})().catch(e => setStatus('Ошибка: ' + e.message));
+</script>
+</body>
+</html>

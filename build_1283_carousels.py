@@ -107,6 +107,8 @@ def place_split(slide: int) -> tuple[Image.Image, tuple[int, int, int, int]]:
 
 def place(slide: int, name: str) -> tuple[Image.Image, tuple[int, int, int, int]]:
     _d, text, mode, cy, mh, _crop = SLIDES[slide]
+    if mode == "ready":                                  # готовый слайд с текстом (рамку проверил его сборщик)
+        return Image.new("RGBA", (W, H), (0, 0, 0, 0)), None
     if mode == "split":
         return place_split(slide)
     cx, mw = CX.get(slide, 0.5), MW.get(slide, (X1 - X0) / W)
@@ -155,7 +157,7 @@ def main() -> int:
     for k, pool in enumerate(pools):
         for src in pool:
             layer, box = place(k, src.name)
-            bad = check_box(W, H, box)
+            bad = box and check_box(W, H, box)
             if bad:
                 raise SystemExit(f"{SLIDES[k][0].name}/{src.name}: текст вне безопасной зоны — {bad}")
             layers[src] = layer
@@ -174,7 +176,8 @@ def main() -> int:
                                            layers[src]).convert("RGB")
                 im = draw_overlay(im)
                 dr = ImageDraw.Draw(im)
-                dr.rectangle(layers[(src, "box")], outline=(255, 255, 0), width=5)
+                if layers[(src, "box")]:
+                    dr.rectangle(layers[(src, "box")], outline=(255, 255, 0), width=5)
                 dr.text((12, 12), src.name[:12], fill=(255, 255, 0))
                 sheet.paste(im.resize((tw, th)), ((i % cols) * tw, (i // cols) * th))
             sheet.save(args.out / f"_qa_{k + 1}_{SLIDES[k][0].name}.jpg", quality=86)
@@ -191,7 +194,9 @@ def main() -> int:
         d = args.out / f"{i:03d}"
         d.mkdir(exist_ok=True)
         for k, src in enumerate(combo, 1):
-            bg = T.darken(fit_bg(src, SLIDES[k - 1][5]), args.darken, "uniform")
+            bg = fit_bg(src, SLIDES[k - 1][5])
+            if SLIDES[k - 1][2] != "ready":
+                bg = T.darken(bg, args.darken, "uniform")
             Image.alpha_composite(bg.convert("RGBA"), layers[src]).convert("RGB").save(d / f"{k}.jpg", quality=95)
             if args.flat:
                 args.flat.mkdir(parents=True, exist_ok=True)

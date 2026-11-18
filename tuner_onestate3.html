@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Тюнер OneState 3</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#14161a; --panel:#1e2127; --line:#30353e; --text:#eceef2; --dim:#969dab; --accent:#ffd23f; --red:#ff4d4d; --ok:#46d38a; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 system-ui,"Segoe UI",sans-serif; }
+  header { display:flex; align-items:center; gap:14px; padding:12px 14px 0; max-width:1400px; margin:auto; flex-wrap:wrap; }
+  h1 { font-size:17px; margin:0; }
+  #status { color:var(--dim); margin-left:auto; }
+  #status.ok { color:var(--ok); }
+  .wrap { display:grid; grid-template-columns:minmax(0,1fr) 250px; gap:14px; padding:14px; max-width:1400px; margin:auto; }
+  @media (max-width:800px){ .wrap{ grid-template-columns:1fr; } }
+  .tabs { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
+  button { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:7px; padding:7px 11px; font:inherit; cursor:pointer; }
+  button:hover { border-color:#566070; }
+  button.on { background:var(--accent); color:#16181c; border-color:var(--accent); font-weight:600; }
+  button.play { background:var(--ok); color:#10231a; border-color:var(--ok); font-weight:700; }
+  button.bad { color:var(--red); }
+  canvas { display:block; width:100%; background:#101215; border:1px solid var(--line); border-radius:7px; cursor:col-resize; touch-action:none; }
+  #zoom { margin-top:8px; }
+  .legend { display:flex; flex-wrap:wrap; gap:14px; margin-top:8px; color:var(--dim); font-size:13px; }
+  .legend i { display:inline-block; width:12px; height:12px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
+  .row { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-top:10px; }
+  .time { font-size:27px; font-weight:700; font-variant-numeric:tabular-nums; min-width:150px; }
+  .lab { color:var(--dim); }
+  .num { font-variant-numeric:tabular-nums; min-width:62px; font-weight:600; }
+  .sp { flex:1; }
+  label { color:var(--dim); display:flex; gap:6px; align-items:center; }
+  .points { display:flex; flex-wrap:wrap; gap:6px; margin-top:12px; }
+  .pt { display:flex; align-items:center; gap:7px; padding:6px 9px; border:1px solid var(--line); border-radius:7px; background:var(--panel); cursor:pointer; font-variant-numeric:tabular-nums; }
+  .pt.cur { border-color:var(--accent); }
+  .pt.off { opacity:.45; }
+  .pt small { color:var(--dim); }
+  .side { position:sticky; top:12px; align-self:start; }
+  .phone { position:relative; width:100%; aspect-ratio:9/16; background:#000; border-radius:10px; overflow:hidden; border:1px solid var(--line); }
+  .phone video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  #stage { position:absolute; left:8px; top:8px; background:rgba(0,0,0,.6); padding:2px 8px; border-radius:6px; font-size:12px; }
+  .hint { color:var(--dim); font-size:12.5px; margin-top:10px; line-height:1.55; }
+  kbd { background:#2a2f38; border-radius:4px; padding:0 5px; font:12px ui-monospace,monospace; color:var(--text); }
+</style>
+</head>
+<body>
+<header><h1>OneState 3: где «кино» сменится на геймплей</h1><span id="status">Загрузка…</span></header>
+<div class="wrap">
+  <main>
+    <div class="tabs" id="tabs"></div>
+    <canvas id="over" height="70"></canvas>
+    <canvas id="zoom" height="210"></canvas>
+    <div class="legend" id="legend"></div>
+    <div class="row">
+      <div class="time" id="time">—</div>
+      <button data-n="-100">−100 мс</button><button data-n="-10">−10</button>
+      <button data-n="10">+10</button><button data-n="100">+100 мс</button>
+      <button id="beat">К биту</button>
+    </div>
+    <div class="row">
+      <span class="lab">«Кино» до перехода:</span>
+      <button data-p="-0.5">−0.5 с</button><button data-p="-0.1">−0.1</button>
+      <span class="num" id="pre">—</span>
+      <button data-p="0.1">+0.1</button><button data-p="0.5">+0.5 с</button>
+      <button id="prebeat" title="Начало ролика — на ближайшую долю">Начало к биту</button>
+      <span class="sp"></span>
+      <span class="lab">Склейки в игре:</span>
+      <button id="step1">каждая доля</button><button id="step2">каждые 2 доли</button>
+    </div>
+    <div class="row">
+      <button class="play" id="full">▶ Как в ролике</button>
+      <button id="stop">■ Стоп</button>
+      <span class="sp"></span>
+      <label>масштаб <input type="range" id="span" min="2" max="14" step="0.5" value="9"></label>
+    </div>
+    <div class="row">
+      <button id="add">+ Новый вариант здесь</button>
+      <button id="toggle">Убрать из партии</button>
+      <button id="del" class="bad">Удалить вариант</button>
+      <span class="sp"></span>
+      <button id="undo">↩ Отменить</button>
+      <button id="reset">Сбросить звук</button>
+    </div>
+    <div class="points" id="points"></div>
+    <div class="hint">
+      Красная линия — момент, где «кино»-кадр (такси крупно / полицейская машина) сменяется на геймплей. Двигай её где удобно: тяни по верхней волне (весь звук) или по нижней (крупно); клик ставит линию в место клика.
+      Полоски — что будет на экране: серые — «кино» (если его больше 2.2 с — два кадра), цветные — куски геймплея; их склейки сами встают на доли (зелёные риски). Ролик — 7 с от начала серой полоски.
+      Каждый вариант (точка внизу) — отдельная настройка звука; галочка — идёт в партию. Всё сохраняется само.
+      <kbd>Пробел</kbd> как в ролике, <kbd>←</kbd> <kbd>→</kbd> 10 мс, <kbd>Shift</kbd> + стрелки 100 мс, <kbd>Ctrl</kbd>+<kbd>Z</kbd> отменить.
+    </div>
+  </main>
+  <aside class="side">
+    <div class="phone">
+      <video id="hook" src="/media/hook" muted playsinline preload="auto"></video>
+      <video id="game" src="/media/game" muted playsinline preload="auto" style="display:none"></video>
+      <span id="stage"></span>
+    </div>
+    <div class="hint">Предпросмотр «как в ролике»: «кино» → геймплей ровно по полоскам, со звуком (на примере такси). Текста и промо здесь нет.</div>
+  </aside>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+let TOTAL = 7.0, songs = [], cur = 0, ptId = null, nextId = 1, ctx = null, playing = null, saveTimer = null, drag = null;
+const audio = new Map(), undoStack = [];
+const song = () => songs[cur];
+const point = () => song().points.find(p => p.id === ptId) || null;
+function setStatus(t, ok) { const s = $('#status'); s.textContent = t; s.className = ok ? 'ok' : ''; }
+function remember() { undoStack.push({ cur, ptId, points: song().points.map(p => ({ ...p })) }); if (undoStack.length > 200) undoStack.shift(); }
+
+function save() {
+  clearTimeout(saveTimer); setStatus('Сохраняю…');
+  saveTimer = setTimeout(async () => {
+    const body = {};
+    for (const s of songs) body[s.key] = s.points.slice().sort((a, b) => a.t - b.t).map(p => ({ t: +p.t.toFixed(3), pre: +p.pre.toFixed(3), step: p.step, on: p.on }));
+    try { const r = await fetch('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (!r.ok) throw new Error(r.status); setStatus('Сохранено', true); }
+    catch (e) { setStatus('Не сохранилось: ' + e.message); }
+  }, 250);
+}
+
+// ----- отрезки: та же логика, что segments() в tuner_onestate3.py и в build_onestate3_reels.py -----
+const COL = ['rgba(150,157,171,.22)', 'rgba(110,117,131,.30)', 'rgba(70,211,138,.24)', 'rgba(90,160,255,.26)', 'rgba(255,210,63,.24)', 'rgba(232,123,164,.26)', 'rgba(255,154,61,.26)', 'rgba(150,120,255,.26)'];
+const SOLID = ['#969dab', '#6e7583', '#46d38a', '#5aa0ff', '#ffd23f', '#e87ba4', '#ff9a3d', '#9678ff'];
+function segs(p) {
+  const bs = song().beats, start = p.t - p.pre, end = Math.min(start + TOTAL, song().dur - .05), out = [];
+  if (p.pre >= 2.2) {
+    const c = bs.filter(b => b >= start + .8 && b <= p.t - .8);
+    const mid = c.length ? c.reduce((x, y) => Math.abs(y - (start + p.pre / 2)) < Math.abs(x - (start + p.pre / 2)) ? y : x) : null;
+    if (mid) out.push({ n: 'кино 1', a: start, b: mid, k: 0 }, { n: 'кино 2', a: mid, b: p.t, k: 1 }); else out.push({ n: 'кино', a: start, b: p.t, k: 0 });
+  } else out.push({ n: 'кино', a: start, b: p.t, k: 0 });
+  const after = bs.filter(b => b > p.t + .3), cuts = after.filter((b, i) => (i + 1) % p.step === 0 && b < end - .5);
+  let a = p.t;
+  [...cuts, end].forEach((c, i) => { out.push({ n: 'игра ' + (i + 1), a, b: c, k: 2 + (i % 6) }); a = c; });
+  return out;
+}
+
+async function ensureCtx() { if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)(); if (ctx.state === 'suspended') await ctx.resume(); return ctx; }
+async function loadAudio(i) {
+  const s = songs[i]; if (audio.has(s.key)) return audio.get(s.key);
+  setStatus('Загружаю звук…');
+  const tmp = ctx || new OfflineAudioContext(1, 1, 44100);
+  const buf = await (await fetch('/media/music/' + s.key)).arrayBuffer();
+  const d = await tmp.decodeAudioData(buf);
+  const e = { buffer: d, pcm: d.getChannelData(0), sr: d.sampleRate, over: null };
+  audio.set(s.key, e); setStatus('Готово', true); return e;
+}
+function fit(c) { const w = Math.round(c.clientWidth * devicePixelRatio), h = Math.round(parseInt(c.getAttribute('height')) * devicePixelRatio); if (c.width !== w || c.height !== h) { c.width = w; c.height = h; c.style.height = (h / devicePixelRatio) + 'px'; } return [w, h]; }
+function wave(g, pcm, sr, a, b, w, h, color) {
+  g.fillStyle = color; const n = (b - a) * sr / w, step = Math.max(1, Math.floor(n / 40));
+  for (let x = 0; x < w; x++) { const i0 = Math.floor((a + (b - a) * x / w) * sr), i1 = Math.floor(i0 + n); let lo = 0, hi = 0;
+    for (let i = Math.max(0, i0); i < Math.min(pcm.length, i1); i += step) { const v = pcm[i]; if (v < lo) lo = v; if (v > hi) hi = v; }
+    const y0 = h / 2 - hi * h / 2, y1 = h / 2 - lo * h / 2; g.fillRect(x, y0, 1, Math.max(1, y1 - y0)); }
+}
+function drawSegs(g, t0, t1, w, h, labels) {
+  const p = point(); if (!p) return;
+  for (const s of segs(p)) {
+    const x0 = Math.max(0, (s.a - t0) / (t1 - t0) * w), x1 = Math.min(w, (s.b - t0) / (t1 - t0) * w); if (x1 <= x0) continue;
+    g.fillStyle = COL[s.k]; g.fillRect(x0, 0, x1 - x0, h);
+    g.fillStyle = 'rgba(255,255,255,.55)'; g.fillRect(x0, 0, devicePixelRatio, h);
+    if (labels && x1 - x0 > 34 * devicePixelRatio) { g.fillStyle = '#eceef2'; g.font = (12 * devicePixelRatio) + 'px system-ui'; g.fillText(s.n, x0 + 4 * devicePixelRatio, 15 * devicePixelRatio); }
+  }
+}
+function zoomRange() { if (drag && drag.range) return drag.range; const p = point(), s = +$('#span').value; if (!p) return [0, s]; const mid = p.t - p.pre + TOTAL / 2; return [mid - s / 2, mid + s / 2]; }
+function drawOver() {
+  const c = $('#over'), a = audio.get(song().key), [w, h] = fit(c), g = c.getContext('2d'); g.clearRect(0, 0, w, h); if (!a) return;
+  if (!a.over || a.over.width !== w) { const o = document.createElement('canvas'); o.width = w; o.height = h; wave(o.getContext('2d'), a.pcm, a.sr, 0, a.buffer.duration, w, h, '#7f8aa0'); a.over = o; }
+  const d = a.buffer.duration; drawSegs(g, 0, d, w, h, false); g.drawImage(a.over, 0, 0);
+  for (const p of song().points) { g.fillStyle = p.id === ptId ? '#ff4d4d' : (p.on ? '#ffd23f' : '#596273'); g.fillRect(p.t / d * w - devicePixelRatio, 0, 2 * devicePixelRatio, h); }
+  if (playing) { g.fillStyle = '#fff'; g.fillRect(playing.pos / d * w, 0, devicePixelRatio, h); }
+}
+function drawZoom() {
+  const c = $('#zoom'), a = audio.get(song().key), [w, h] = fit(c), g = c.getContext('2d'); g.clearRect(0, 0, w, h); const p = point(); if (!a || !p) return;
+  const [t0, t1] = zoomRange();
+  drawSegs(g, t0, t1, w, h, true); wave(g, a.pcm, a.sr, t0, t1, w, h, '#7f8aa0');
+  g.fillStyle = 'rgba(70,211,138,.85)'; for (const b of song().beats) if (b > t0 && b < t1) g.fillRect((b - t0) / (t1 - t0) * w, 0, devicePixelRatio, 16 * devicePixelRatio);
+  g.fillStyle = '#596273'; g.font = (11 * devicePixelRatio) + 'px system-ui';
+  for (let m = Math.ceil(t0); m < t1; m += 1) { const x = (m - t0) / (t1 - t0) * w; g.fillRect(x, h - 8 * devicePixelRatio, devicePixelRatio, 8 * devicePixelRatio); g.fillText(m + ' с', x + 3, h - 10 * devicePixelRatio); }
+  g.fillStyle = '#ff4d4d'; g.fillRect((p.t - t0) / (t1 - t0) * w - devicePixelRatio, 0, 2 * devicePixelRatio, h);
+  if (playing && playing.pos > t0 && playing.pos < t1) { g.fillStyle = '#fff'; g.fillRect((playing.pos - t0) / (t1 - t0) * w, 0, devicePixelRatio, h); }
+}
+function renderUi() {
+  const tabs = $('#tabs'); tabs.innerHTML = '';
+  songs.forEach((s, i) => { const b = document.createElement('button'); b.textContent = `${s.title} · ${s.points.filter(p => p.on).length}`; if (i === cur) b.className = 'on'; b.onclick = () => selectSong(i); tabs.append(b); });
+  const p = point();
+  $('#time').textContent = p ? p.t.toFixed(3) + ' с' : '—';
+  $('#pre').textContent = p ? p.pre.toFixed(2) + ' с' : '—';
+  $('#step1').className = p && p.step === 1 ? 'on' : ''; $('#step2').className = p && p.step === 2 ? 'on' : '';
+  $('#toggle').textContent = p && !p.on ? 'Вернуть в партию' : 'Убрать из партии';
+  const box = $('#points'); box.innerHTML = '';
+  song().points.slice().sort((a, b) => a.t - b.t).forEach((q, i) => {
+    const d = document.createElement('div'); d.className = 'pt' + (q.id === ptId ? ' cur' : '') + (q.on ? '' : ' off');
+    d.innerHTML = `<input type="checkbox" ${q.on ? 'checked' : ''}><span>вариант ${i + 1}: переход ${q.t.toFixed(2)}</span><small>кино ${q.pre.toFixed(2)} с</small>`;
+    d.querySelector('input').onclick = e => { e.stopPropagation(); remember(); q.on = e.target.checked; renderUi(); save(); };
+    d.onclick = () => { ptId = q.id; stop(); redraw(); }; box.append(d);
+  });
+  if (p) { const sg = segs(p); $('#legend').innerHTML = sg.map(s => `<span><i style="background:${SOLID[s.k]}"></i>${s.n} ${(s.b - s.a).toFixed(2)} с</span>`).join('') + `<span>всего ${(sg[sg.length - 1].b - sg[0].a).toFixed(2)} с · звук с ${(p.t - p.pre).toFixed(2)} с</span>`; }
+  else $('#legend').innerHTML = '';
+}
+function redraw() { renderUi(); drawOver(); drawZoom(); }
+async function selectSong(i) { stop(); cur = i; ptId = song().points.length ? song().points.slice().sort((a, b) => a.t - b.t)[0].id : null; renderUi(); await loadAudio(i); if (cur === i) redraw(); }
+const minT = p => p.pre;                                       // начало звука не раньше 0
+function setT(t) { const p = point(); if (!p) return; const a = audio.get(song().key); p.t = Math.max(minT(p), Math.min(a ? a.buffer.duration - 1 : t, t)); redraw(); }
+function move(dt) { const p = point(); if (!p) return; stop(); remember(); setT(p.t + dt); save(); }
+function setPre(v) { const p = point(); if (!p) return; stop(); remember(); p.pre = Math.max(.6, Math.min(4.5, Math.min(p.t, v))); redraw(); save(); }
+function nearestBeat(t) { const b = song().beats; return b.reduce((x, y) => Math.abs(y - t) < Math.abs(x - t) ? y : x, b[0]); }
+
+function stop() {
+  if (playing) { try { playing.src.stop(); } catch (e) {} cancelAnimationFrame(playing.raf); playing = null; }
+  $('#hook').pause(); $('#game').pause(); $('#hook').style.display = 'block'; $('#game').style.display = 'none'; $('#stage').textContent = '';
+  drawOver(); drawZoom();
+}
+async function play() {
+  const p = point(); if (!p) return; await ensureCtx(); const a = await loadAudio(cur); stop();
+  const sg = segs(p), from = Math.max(0, sg[0].a), to = sg[sg.length - 1].b;
+  const src = ctx.createBufferSource(); src.buffer = a.buffer; src.connect(ctx.destination);
+  const at = ctx.currentTime + .15; src.start(at, from, to - from);
+  const hook = $('#hook'), game = $('#game'); hook.currentTime = 0; hook.play().catch(() => {});
+  const run = { src, pos: from, raf: 0 }; playing = run; let stage = -1;
+  const tick = () => {
+    if (playing !== run) return;
+    run.pos = from + (ctx.currentTime - at) - (ctx.outputLatency || 0);
+    const idx = sg.findIndex(s => run.pos >= s.a && run.pos < s.b);
+    if (idx !== stage && idx >= 0) {
+      stage = idx; const s = sg[idx]; $('#stage').textContent = s.n;
+      if (s.k <= 1) { hook.style.display = 'block'; game.style.display = 'none'; hook.currentTime = s.k === 1 ? 2.2 : 0; hook.play().catch(() => {}); }
+      else { hook.style.display = 'none'; game.style.display = 'block'; game.currentTime = ((idx - 1) * 1.7) % 9; game.play().catch(() => {}); }
+    }
+    drawOver(); drawZoom();
+    if (run.pos >= to) { stop(); return; }
+    run.raf = requestAnimationFrame(tick);
+  };
+  run.raf = requestAnimationFrame(tick);
+}
+
+// ----- мышь: верхняя волна — весь звук, нижняя — крупно; клик ставит линию, тянуть можно где угодно -----
+function bindDrag(c, timeOf) {
+  c.addEventListener('pointerdown', e => { if (!point() || !audio.get(song().key)) return; stop(); remember(); drag = { range: c.id === 'zoom' ? zoomRange() : null }; c.setPointerCapture(e.pointerId); setT(timeOf(e)); });
+  c.addEventListener('pointermove', e => { if (drag) setT(timeOf(e)); });
+  const end = () => { if (drag) { drag = null; redraw(); save(); } };
+  c.addEventListener('pointerup', end); c.addEventListener('pointercancel', end);
+}
+bindDrag($('#over'), e => { const r = $('#over').getBoundingClientRect(); return (e.clientX - r.left) / r.width * audio.get(song().key).buffer.duration; });
+bindDrag($('#zoom'), e => { const r = $('#zoom').getBoundingClientRect(), [t0, t1] = zoomRange(); return t0 + (e.clientX - r.left) / r.width * (t1 - t0); });
+
+document.querySelectorAll('[data-n]').forEach(b => b.onclick = () => move(+b.dataset.n / 1000));
+document.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { const p = point(); if (p) setPre(p.pre + +b.dataset.p); });
+$('#beat').onclick = () => { const p = point(); if (p) move(nearestBeat(p.t) - p.t); };
+$('#prebeat').onclick = () => { const p = point(); if (p) setPre(p.t - nearestBeat(p.t - p.pre)); };
+$('#step1').onclick = () => { const p = point(); if (p) { remember(); p.step = 1; redraw(); save(); } };
+$('#step2').onclick = () => { const p = point(); if (p) { remember(); p.step = 2; redraw(); save(); } };
+$('#full').onclick = play; $('#stop').onclick = stop; $('#span').oninput = drawZoom;
+$('#add').onclick = () => { remember(); const p = point(); const n = { id: nextId++, t: p ? p.t + 1 : 3, pre: p ? p.pre : 1.5, step: p ? p.step : 2, on: true }; song().points.push(n); ptId = n.id; stop(); setT(n.t); save(); };
+$('#toggle').onclick = () => { const p = point(); if (p) { remember(); p.on = !p.on; redraw(); save(); } };
+$('#del').onclick = () => { const s = song(), p = point(); if (!p) return; stop(); remember(); s.points = s.points.filter(x => x.id !== p.id); ptId = s.points.length ? s.points[0].id : null; redraw(); save(); };
+function undo() { const u = undoStack.pop(); if (!u) return; stop(); if (u.cur !== cur) { selectSong(u.cur).then(() => { songs[u.cur].points = u.points; ptId = u.ptId; redraw(); save(); }); return; } song().points = u.points; ptId = u.ptId; redraw(); save(); }
+$('#undo').onclick = undo;
+$('#reset').onclick = () => { if (!confirm('Вернуть исходные варианты для этого звука?')) return; remember(); stop(); song().points = song().defaults.map(d => ({ id: nextId++, ...d })); ptId = song().points[0].id; redraw(); save(); };
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') { e.preventDefault(); undo(); return; }
+  if (e.target.tagName === 'INPUT' && e.target.type !== 'range' && e.target.type !== 'checkbox') return;
+  const step = e.shiftKey ? .1 : .01;
+  if (e.code === 'Space') { e.preventDefault(); playing ? stop() : play(); }
+  else if (e.code === 'ArrowLeft') { e.preventDefault(); move(-step); }
+  else if (e.code === 'ArrowRight') { e.preventDefault(); move(step); }
+});
+window.addEventListener('resize', () => { audio.forEach(a => a.over = null); drawOver(); drawZoom(); });
+(async () => {
+  const st = await (await fetch('/api/state')).json(); TOTAL = st.total;
+  songs = st.songs.map(s => ({ ...s, points: s.points.map(p => ({ id: nextId++, step: 2, ...p })) }));
+  await selectSong(0);
+})().catch(e => setStatus('Ошибка: ' + e.message));
+</script>
+</body>
+</html>

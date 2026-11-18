@@ -151,10 +151,18 @@ def main() -> int:
     ap.add_argument("--qa", action="store_true", help="QA-листы: все кадры слайда с текстом и зонами")
     ap.add_argument("--flat", type=Path, help="ещё и одной папкой: sort_<слайд>_<карусель>_<id>.jpg")
     ap.add_argument("--flat-id", default="")
+    ap.add_argument("--no-plate", action="store_true",
+                    help="s1/s2 без белой подложки — обычный белый TikTok-текст с чёрной обводкой")
+    ap.add_argument("--avoid", type=Path, action="append", default=[],
+                    help="manifest.json сданной партии: её наборы кадров не повторять")
     args = ap.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 
+    if args.no_plate:
+        for k, sl in enumerate(SLIDES):
+            if sl[2] == "plate":
+                SLIDES[k] = (sl[0], sl[1], "chin", sl[3])
     pools = [sorted(f for f in d.iterdir() if f.is_file() and f.suffix.lower() in EXT and not f.name.startswith("_"))
              for d, *_ in SLIDES]
     print("кадров: " + " · ".join(f"{d.name} {len(p)}" for (d, *_), p in zip(SLIDES, pools)), flush=True)
@@ -183,7 +191,14 @@ def main() -> int:
                 sheet.paste(im.resize((tw, th)), (i * tw, 0))
             sheet.save(args.out / f"_qa_{k + 1}_{SLIDES[k][0].name}.jpg", quality=86)
 
-    carousels = G.plan(args.n, pools, random.Random(args.seed))
+    avoid = {tuple(m["frames"]) for a in args.avoid for m in json.loads(a.read_text(encoding="utf-8"))}
+    if avoid:                                         # план с запасом: сданные наборы выкидываем, берём первые n новых
+        carousels = [c for c in G.plan(args.n + len(avoid) + 50, pools, random.Random(args.seed))
+                     if tuple(p.name for p in c) not in avoid][:args.n]
+        if len(carousels) < args.n:
+            raise SystemExit("не хватает новых наборов кадров")
+    else:
+        carousels = G.plan(args.n, pools, random.Random(args.seed))
     manifest = []
     for i, combo in enumerate(carousels, 1):
         d = args.out / f"{i:03d}"

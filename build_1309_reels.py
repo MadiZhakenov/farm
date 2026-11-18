@@ -387,8 +387,8 @@ def build(job: dict) -> str:
     out = Path(job["out"])
     dest = out / f"{job['n']:03d}_{ID}.mp4"
     subprocess.run([FF, "-v", "error", "-y", *inputs, "-filter_complex", ";".join(parts), "-map", "[v]", "-map", f"{ib + 1}:a",
-                    "-t", f"{TOTAL}", "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-r", str(FPS),
-                    *SDR_COLOR_ARGS, "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(dest)], check=True)
+                    "-t", f"{TOTAL}", "-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", "27", "-maxrate", "6M", "-bufsize", "12M", "-pix_fmt", "yuv420p", "-r", str(FPS),
+                    *SDR_COLOR_ARGS, "-c:a", "aac", "-b:a", "192k", "-map_metadata", "-1", "-fflags", "+bitexact", "-flags:v", "+bitexact", "-flags:a", "+bitexact", "-metadata:s:v:0", "encoder=", "-metadata:s:v:0", "handler_name=", "-metadata:s:a:0", "handler_name=", "-movflags", "+faststart", str(dest)], check=True)
     return f"{dest.name}: подпись {job['caption'] + 1}, комм. {job['comment'] + 1}, моментов {nm}, {job['person'][0]}"
 
 

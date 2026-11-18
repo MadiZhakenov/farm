@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Тюнер переходов</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#14161a; --panel:#1e2127; --line:#30353e; --text:#eceef2; --dim:#969dab; --accent:#ffd23f; --red:#ff4d4d; --bass:#ff9a3d; --wave:#7f8aa0; --ok:#46d38a; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 system-ui,"Segoe UI",sans-serif; }
+  .wrap { display:grid; grid-template-columns:minmax(0,1fr) 250px; gap:14px; padding:14px; max-width:1400px; margin:auto; }
+  @media (max-width:800px){ .wrap{ grid-template-columns:1fr; } }
+  h1 { font-size:17px; margin:0; }
+  header { display:flex; align-items:center; gap:14px; padding:12px 14px 0; max-width:1400px; margin:auto; flex-wrap:wrap; }
+  #status { color:var(--dim); margin-left:auto; }
+  #status.ok { color:var(--ok); }
+  .tabs { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
+  button { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:7px; padding:7px 11px; font:inherit; cursor:pointer; }
+  button:hover { border-color:#566070; }
+  button.on { background:var(--accent); color:#16181c; border-color:var(--accent); font-weight:600; }
+  button.play { background:var(--ok); color:#10231a; border-color:var(--ok); font-weight:700; }
+  button.bad { color:var(--red); }
+  canvas { display:block; width:100%; background:#101215; border:1px solid var(--line); border-radius:7px; }
+  #zoom { cursor:col-resize; touch-action:none; margin-top:8px; }
+  #over { cursor:col-resize; touch-action:none; }
+  .legend { display:flex; flex-wrap:wrap; gap:14px; margin-top:8px; color:var(--dim); font-size:13px; }
+  .legend i { display:inline-block; width:12px; height:12px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
+  .phone img.ranks { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:none; }
+  .row { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-top:10px; }
+  .time { font-size:27px; font-weight:700; font-variant-numeric:tabular-nums; min-width:150px; }
+  .delta { color:var(--dim); min-width:80px; }
+  .sp { flex:1; }
+  label { color:var(--dim); display:flex; gap:6px; align-items:center; }
+  .points { display:flex; flex-wrap:wrap; gap:6px; margin-top:12px; }
+  .pt { display:flex; align-items:center; gap:7px; padding:6px 9px; border:1px solid var(--line); border-radius:7px; background:var(--panel); cursor:pointer; font-variant-numeric:tabular-nums; }
+  .pt.cur { border-color:var(--accent); }
+  .pt.off { opacity:.45; }
+  .pt small { color:var(--dim); }
+  .side { position:sticky; top:12px; align-self:start; }
+  .phone { position:relative; width:100%; aspect-ratio:9/16; background:#000; border-radius:10px; overflow:hidden; border:1px solid var(--line); }
+  .phone video.scene { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  .gamebox { position:absolute; inset:0; overflow:hidden; display:none; }
+  .gamebox video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  .hint { color:var(--dim); font-size:12.5px; margin-top:10px; line-height:1.55; }
+  kbd { background:#2a2f38; border-radius:4px; padding:0 5px; font:12px ui-monospace,monospace; color:var(--text); }
+</style>
+</head>
+<body>
+<header><h1>Drops «he hasn’t texted me back»: где лицо сменится на игру</h1><span id="status">Загрузка…</span></header>
+<div class="wrap">
+  <main>
+    <div class="tabs" id="tabs"></div>
+    <canvas id="over" height="70"></canvas>
+    <canvas id="zoom" height="210"></canvas>
+    <div class="legend" id="legend"></div>
+    <div class="row">
+      <div class="time" id="time">—</div><div class="delta" id="delta"></div>
+      <button data-n="-100">−100 мс</button><button data-n="-10">−10</button>
+      <button data-n="10">+10</button><button data-n="100">+100 мс</button>
+      <button id="beat" title="Подвинуть на ближайший бит (зелёные отметки)">К биту</button>
+      <button id="snap" title="Подвинуть на ближайшую атаку в пределах 60 мс">К удару</button>
+    </div>
+    <div class="row">
+      <button class="play" id="full">▶ Как в ролике</button>
+      <button id="short">▶ Только момент</button>
+      <button id="stop">■ Стоп</button>
+      <label><input type="checkbox" id="click"> щелчок в точке</label>
+      <span class="sp"></span>
+      <label>масштаб <input type="range" id="span" min="0.4" max="12" step="0.1" value="8"></label>
+    </div>
+    <div class="row">
+      <button id="add">+ Новая точка здесь</button>
+      <button id="toggle">Убрать из партии</button>
+      <button id="del" class="bad">Удалить точку</button>
+      <span class="sp"></span>
+      <button id="undo">↩ Отменить</button>
+      <button id="reset">Сбросить песню</button>
+    </div>
+    <div class="points" id="points"></div>
+    <div class="hint">
+      Красная линия — момент, где лицо сменяется на игру. Двигай где удобно: тяни по верхней волне (весь трек) или по нижней (крупно); клик ставит линию в место клика.
+      Цветные полоски — что будет на экране: серая — лицо (3.2 с до линии), жёлтая — вкладка Ranks, зелёная — игра 1, синяя — игра 2 (их склейки сами встают на ближайшие биты).
+      Зелёные риски — биты трека, «К биту» прилипает к ближайшему. Оранжевое — бас, серое — весь звук.
+      «Новая точка здесь» добавит ещё одну точку (на 1 с дальше текущей) — так можно сделать несколько вариантов перехода на одном треке. Галочка значит, что точка идёт в партию.
+      Всё сохраняется само. <kbd>Пробел</kbd> как в ролике, <kbd>A</kbd> только момент, <kbd>←</kbd> <kbd>→</kbd> 10 мс, <kbd>Shift</kbd> + стрелки 100 мс, <kbd>Ctrl</kbd>+<kbd>Z</kbd> отменить.
+    </div>
+  </main>
+  <aside class="side">
+    <div class="phone">
+      <video class="scene" id="scene" src="/media/scene" muted playsinline preload="auto"></video>
+      <img class="ranks" id="ranks" src="/media/ranks" alt="">
+      <div class="gamebox" id="gamebox"><video id="game" src="/media/game" muted playsinline preload="auto"></video></div>
+    </div>
+    <div class="hint">Предпросмотр «как в ролике»: лицо → Ranks → игра 1 → игра 2 ровно по полоскам, со звуком. Текста здесь нет.</div>
+  </aside>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+let PRE = 3.0; const POST = 4.0;
+let songs = [], cur = 0, ptId = null, nextId = 1, ctx = null;
+const audio = new Map();
+let playing = null, saveTimer = null, cursor = null, drag = null;
+const undoStack = [];
+function remember() {
+  undoStack.push({ cur, ptId, points: song().points.map(p => ({ ...p })) });
+  if (undoStack.length > 200) undoStack.shift();
+}
+
+const song = () => songs[cur];
+const point = () => song().points.find(p => p.id === ptId) || null;
+const fmt = t => t.toFixed(3) + ' с';
+
+function setStatus(text, ok) { const s = $('#status'); s.textContent = text; s.className = ok ? 'ok' : ''; }
+
+function save() {
+  clearTimeout(saveTimer);
+  setStatus('Сохраняю…');
+  saveTimer = setTimeout(async () => {
+    const body = {};
+    for (const s of songs) body[s.key] = s.points.slice().sort((a, b) => a.t - b.t).map(p => ({ t: +p.t.toFixed(3), on: p.on }));
+    try {
+      const r = await fetch('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (!r.ok) throw new Error(r.status);
+      setStatus('Сохранено', true);
+    } catch (e) { setStatus('Не сохранилось: ' + e.message); }
+  }, 250);
+}
+
+async function ensureCtx() { if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)(); if (ctx.state === 'suspended') await ctx.resume(); return ctx; }
+
+async function loadAudio(i) {
+  const s = songs[i];
+  if (audio.has(s.key)) return audio.get(s.key);
+  setStatus('Загружаю песню…');
+  const tmp = ctx || new (window.OfflineAudioContext)(1, 1, 44100);
+  const buf = await (await fetch('/media/music/' + s.key)).arrayBuffer();
+  const decoded = await tmp.decodeAudioData(buf);
+  const off = new OfflineAudioContext(1, decoded.length, decoded.sampleRate);
+  const src = off.createBufferSource(); src.buffer = decoded;
+  const lp = off.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 150;
+  src.connect(lp); lp.connect(off.destination); src.start();
+  const low = await off.startRendering();
+  const entry = { buffer: decoded, pcm: decoded.getChannelData(0), low: low.getChannelData(0), sr: decoded.sampleRate, over: null };
+  audio.set(s.key, entry);
+  setStatus('Готово', true);
+  return entry;
+}
+
+function rmsDb(pcm, sr, a, b) {
+  const i0 = Math.max(0, Math.floor(a * sr)), i1 = Math.min(pcm.length, Math.floor(b * sr));
+  if (i1 <= i0) return -120;
+  let s = 0; for (let i = i0; i < i1; i++) s += pcm[i] * pcm[i];
+  return 10 * Math.log10(s / (i1 - i0) + 1e-12);
+}
+function jump(t) { const a = audio.get(song().key); return a ? rmsDb(a.pcm, a.sr, t, t + .35) - rmsDb(a.pcm, a.sr, t - .35, t) : 0; }
+
+function fit(c) { const w = Math.round(c.clientWidth * devicePixelRatio), h = Math.round(parseInt(c.getAttribute('height')) * devicePixelRatio); if (c.width !== w || c.height !== h) { c.width = w; c.height = h; c.style.height = (h / devicePixelRatio) + 'px'; } return [w, h]; }
+
+function drawWave(g, pcm, sr, a, b, w, h, color, scale) {
+  g.fillStyle = color;
+  const n = (b - a) * sr / w, step = Math.max(1, Math.floor(n / 40));
+  for (let x = 0; x < w; x++) {
+    const i0 = Math.floor((a + (b - a) * x / w) * sr), i1 = Math.floor(i0 + n);
+    let lo = 0, hi = 0;
+    for (let i = Math.max(0, i0); i < Math.min(pcm.length, i1); i += step) { const v = pcm[i]; if (v < lo) lo = v; if (v > hi) hi = v; }
+    const y0 = h / 2 - hi * h / 2 * scale, y1 = h / 2 - lo * h / 2 * scale;
+    g.fillRect(x, y0, 1, Math.max(1, y1 - y0));
+  }
+}
+
+function drawOver() {
+  const c = $('#over'), a = audio.get(song().key), [w, h] = fit(c), g = c.getContext('2d');
+  g.clearRect(0, 0, w, h);
+  if (!a) return;
+  if (!a.over || a.over.width !== w) {
+    const o = document.createElement('canvas'); o.width = w; o.height = h;
+    drawWave(o.getContext('2d'), a.pcm, a.sr, 0, a.buffer.duration, w, h, '#7f8aa0', 1);
+    a.over = o;
+  }
+  g.drawImage(a.over, 0, 0);
+  const d = a.buffer.duration;
+  drawSegs(g, 0, d, w, h, false);
+  for (const p of song().points) {
+    g.fillStyle = p.id === ptId ? '#ff4d4d' : (p.on ? '#ffd23f' : '#596273');
+    g.fillRect(p.t / d * w - devicePixelRatio, 0, 2 * devicePixelRatio, h);
+  }
+  if (cursor !== null) { g.fillStyle = '#46d38a'; g.fillRect(cursor / d * w, 0, 2 * devicePixelRatio, h); }
+  if (playing) { g.fillStyle = '#fff'; g.fillRect(playing.pos / d * w, 0, devicePixelRatio, h); }
+}
+
+const SEG_COL = { 'лицо': 'rgba(150,157,171,.20)', 'Ranks': 'rgba(255,210,63,.24)', 'игра 1': 'rgba(70,211,138,.22)', 'игра 2': 'rgba(90,160,255,.24)' };
+const SEG_SOLID = { 'лицо': '#969dab', 'Ranks': '#ffd23f', 'игра 1': '#46d38a', 'игра 2': '#5aa0ff' };
+function segs(t) {
+  const bs = (song().beats || []).filter(b => b > t + .3);
+  const near = (lo, hi, want, def) => { const c = bs.filter(b => b >= lo && b <= hi); return c.length ? c.reduce((x, y) => Math.abs(y - want) < Math.abs(x - want) ? y : x) : def; };
+  const b1 = near(t + .95, t + 1.45, t + 1.2, t + 1.2), b2 = near(b1 + .65, b1 + 1.05, b1 + .85, b1 + .85);
+  const end = b2 + (8.95 - PRE - (b1 - t) - (b2 - b1));            // ролик 9 с: игра 2 до конца
+  return [{ n: 'лицо', a: t - PRE, b: t }, { n: 'Ranks', a: t, b: b1 }, { n: 'игра 1', a: b1, b: b2 }, { n: 'игра 2', a: b2, b: end }];
+}
+function drawSegs(g, t0, t1, w, h, labels) {
+  const p = point(); if (!p) return;
+  for (const s of segs(p.t)) {
+    const x0 = Math.max(0, (s.a - t0) / (t1 - t0) * w), x1 = Math.min(w, (s.b - t0) / (t1 - t0) * w);
+    if (x1 <= x0) continue;
+    g.fillStyle = SEG_COL[s.n]; g.fillRect(x0, 0, x1 - x0, h);
+    g.fillStyle = 'rgba(255,255,255,.55)'; g.fillRect(x0, 0, devicePixelRatio, h);
+    if (labels && x1 - x0 > 40 * devicePixelRatio) { g.fillStyle = '#eceef2'; g.font = (12 * devicePixelRatio) + 'px system-ui'; g.fillText(s.n, x0 + 5 * devicePixelRatio, 15 * devicePixelRatio); }
+  }
+}
+function renderLegend() {
+  const p = point(); if (!p) { $('#legend').innerHTML = ''; return; }
+  const sg = segs(p.t);
+  $('#legend').innerHTML = sg.map(s => `<span><i style="background:${SEG_SOLID[s.n]}"></i>${s.n} ${(s.b - s.a).toFixed(2)} с</span>`).join('') +
+    `<span>всего ${(sg[3].b - sg[0].a).toFixed(2)} с</span>`;
+}
+function zoomRange() { if (drag) return drag.range; const p = point(), s = +$('#span').value; const t = p ? p.t : 0; return [t - s / 2, t + s / 2]; }
+
+function drawZoom() {
+  const c = $('#zoom'), a = audio.get(song().key), [w, h] = fit(c), g = c.getContext('2d');
+  g.clearRect(0, 0, w, h);
+  if (!a || !point()) return;
+  const [t0, t1] = zoomRange();
+  drawSegs(g, t0, t1, w, h, true);
+  drawWave(g, a.pcm, a.sr, t0, t1, w, h, '#7f8aa0', 1);
+  drawWave(g, a.low, a.sr, t0, t1, w, h, '#ff9a3d', 1);
+  g.fillStyle = '#596273'; g.font = (11 * devicePixelRatio) + 'px system-ui';
+  const step = (t1 - t0) > 3 ? 1 : (t1 - t0) > 1.2 ? .25 : .1;
+  for (let m = Math.ceil(t0 / step) * step; m < t1; m += step) {
+    const x = (m - t0) / (t1 - t0) * w;
+    g.fillRect(x, h - 8 * devicePixelRatio, devicePixelRatio, 8 * devicePixelRatio);
+    g.fillText((m - point().t).toFixed(2), x + 3, h - 10 * devicePixelRatio);
+  }
+  for (const p of song().points) if (p.id !== ptId && p.t > t0 && p.t < t1) { g.fillStyle = '#ffd23f'; g.fillRect((p.t - t0) / (t1 - t0) * w, 0, devicePixelRatio, h); }
+  g.fillStyle = 'rgba(70,211,138,.75)';
+  for (const b of song().beats || []) if (b > t0 && b < t1) g.fillRect((b - t0) / (t1 - t0) * w, 0, devicePixelRatio, 14 * devicePixelRatio);
+  g.fillStyle = '#ff4d4d'; g.fillRect((point().t - t0) / (t1 - t0) * w - devicePixelRatio, 0, 2 * devicePixelRatio, h);
+  if (playing && playing.pos > t0 && playing.pos < t1) { g.fillStyle = '#fff'; g.fillRect((playing.pos - t0) / (t1 - t0) * w, 0, devicePixelRatio, h); }
+}
+
+function renderUi() {
+  const tabs = $('#tabs'); tabs.innerHTML = '';
+  songs.forEach((s, i) => {
+    const b = document.createElement('button');
+    b.textContent = `${s.title} · ${s.points.filter(p => p.on).length}`;
+    if (i === cur) b.className = 'on';
+    b.onclick = () => selectSong(i);
+    tabs.append(b);
+  });
+  const p = point();
+  $('#time').textContent = p ? fmt(p.t) : '—';
+  $('#delta').textContent = p ? `скачок ${jump(p.t) >= 0 ? '+' : ''}${jump(p.t).toFixed(1)} дБ` : '';
+  $('#toggle').textContent = p && !p.on ? 'Вернуть в партию' : 'Убрать из партии';
+  const box = $('#points'); box.innerHTML = '';
+  song().points.slice().sort((a, b) => a.t - b.t).forEach(q => {
+    const d = document.createElement('div');
+    d.className = 'pt' + (q.id === ptId ? ' cur' : '') + (q.on ? '' : ' off');
+    const j = jump(q.t);
+    d.innerHTML = `<input type="checkbox" ${q.on ? 'checked' : ''}><span>${q.t.toFixed(2)}</span><small>${j >= 0 ? '+' : ''}${j.toFixed(1)} дБ</small>`;
+    d.querySelector('input').onclick = e => { e.stopPropagation(); remember(); q.on = e.target.checked; renderUi(); save(); };
+    d.onclick = () => { ptId = q.id; stop(); redraw(); };
+    box.append(d);
+  });
+}
+function redraw() { renderUi(); renderLegend(); drawOver(); drawZoom(); }
+
+async function selectSong(i) {
+  stop();
+  cur = i;
+  ptId = song().points.length ? song().points.slice().sort((a, b) => a.t - b.t)[0].id : null;
+  renderUi();
+  await loadAudio(i);
+  if (cur === i) redraw();
+}
+
+function move(dt) { const p = point(); if (!p) return; stop(); remember(); p.t = Math.max(PRE, p.t + dt); redraw(); save(); }
+function setT(t) { const p = point(); if (!p) return; p.t = Math.max(PRE, t); redraw(); }
+
+function stop() {
+  if (playing) { try { playing.src.stop(); } catch (e) {} cancelAnimationFrame(playing.raf); playing = null; }
+  $('#scene').pause(); $('#game').pause();
+  $('#gamebox').style.display = 'none'; $('#ranks').style.display = 'none'; $('#scene').style.display = 'block';
+  drawOver(); drawZoom();
+}
+
+async function play(mode) {
+  const p = point(); if (!p) return;
+  await ensureCtx();
+  const a = await loadAudio(cur);
+  stop();
+  const sg = segs(p.t);
+  const from = mode === 'full' ? sg[0].a : p.t - 1, to = mode === 'full' ? sg[3].b : p.t + 1;
+  const src = ctx.createBufferSource(); src.buffer = a.buffer; src.connect(ctx.destination);
+  const at = ctx.currentTime + .15;
+  src.start(at, from, to - from);
+  if ($('#click').checked) {
+    const o = ctx.createOscillator(), g = ctx.createGain(); o.frequency.value = 1800; g.gain.value = .5;
+    o.connect(g); g.connect(ctx.destination);
+    const ct = at + p.t - from; g.gain.setValueAtTime(.5, ct); g.gain.exponentialRampToValueAtTime(.001, ct + .04); o.start(ct); o.stop(ct + .05);
+  }
+  const scene = $('#scene'), game = $('#game'), box = $('#gamebox');
+  const rk = $('#ranks');
+  if (mode === 'full') { scene.style.display = 'block'; scene.currentTime = 0; scene.play().catch(() => {}); game.pause(); game.currentTime = 1; }
+  let stage = 0;
+  const run = { src, pos: from, raf: 0 };
+  playing = run;
+  const tick = () => {
+    if (playing !== run) return;
+    run.pos = from + (ctx.currentTime - at) - (ctx.outputLatency || 0);
+    if (mode === 'full') {
+      const st = run.pos >= sg[2].b ? 3 : run.pos >= sg[1].b ? 2 : run.pos >= p.t ? 1 : 0;
+      if (st !== stage) {
+        stage = st;
+        scene.style.display = st === 0 ? 'block' : 'none';
+        rk.style.display = st === 1 ? 'block' : 'none';
+        box.style.display = st >= 2 ? 'block' : 'none';
+        if (st === 2) { game.currentTime = 1; game.play().catch(() => {}); }
+        if (st === 3) { game.currentTime = 7; game.play().catch(() => {}); }
+      }
+    }
+    drawOver(); drawZoom();
+    if (run.pos >= to) { stop(); return; }
+    run.raf = requestAnimationFrame(tick);
+  };
+  run.raf = requestAnimationFrame(tick);
+}
+
+function snap() {
+  const p = point(), a = audio.get(song().key); if (!p || !a) return;
+  const win = Math.round(.005 * a.sr);
+  let best = -1, bt = p.t;
+  for (let t = p.t - .06; t <= p.t + .06; t += .002) {
+    const d = rmsDb(a.pcm, a.sr, t, t + win / a.sr * 6) - rmsDb(a.pcm, a.sr, t - win / a.sr * 6, t);
+    if (d > best) { best = d; bt = t; }
+  }
+  move(bt - p.t);
+}
+
+function timeAt(e) { const r = $('#zoom').getBoundingClientRect(), [t0, t1] = zoomRange(); return t0 + (e.clientX - r.left) / r.width * (t1 - t0); }
+$('#zoom').addEventListener('pointerdown', e => {
+  const p = point(); if (!p) return;
+  const r = $('#zoom').getBoundingClientRect(), [t0, t1] = zoomRange();
+  const lineX = r.left + (p.t - t0) / (t1 - t0) * r.width;
+  stop(); remember();
+  const near = Math.abs(e.clientX - lineX) <= 14;
+  drag = { range: [t0, t1], off: near ? p.t - timeAt(e) : 0 };
+  if (!near) setT(timeAt(e));
+  $('#zoom').setPointerCapture(e.pointerId);
+});
+$('#zoom').addEventListener('pointermove', e => {
+  if (!drag) return;
+  const [t0, t1] = drag.range;
+  point().t = Math.max(PRE, Math.min(t1, Math.max(t0, timeAt(e) + drag.off)));
+  redraw();
+});
+const endDrag = () => { if (drag) { drag = null; redraw(); save(); } };
+$('#zoom').addEventListener('pointerup', endDrag);
+$('#zoom').addEventListener('pointercancel', endDrag);
+let overDrag = false;
+const overTime = e => { const a = audio.get(song().key), r = $('#over').getBoundingClientRect(); return (e.clientX - r.left) / r.width * a.buffer.duration; };
+$('#over').addEventListener('pointerdown', e => {
+  if (!audio.get(song().key) || !point()) return;
+  stop(); remember(); overDrag = true; cursor = null;
+  $('#over').setPointerCapture(e.pointerId); setT(overTime(e));
+});
+$('#over').addEventListener('pointermove', e => { if (overDrag) setT(overTime(e)); });
+const endOver = () => { if (overDrag) { overDrag = false; redraw(); save(); } };
+$('#over').addEventListener('pointerup', endOver);
+$('#over').addEventListener('pointercancel', endOver);
+document.querySelectorAll('[data-n]').forEach(b => b.onclick = () => move(+b.dataset.n / 1000));
+$('#snap').onclick = snap;
+$('#beat').onclick = () => { const p = point(), b = song().beats || []; if (!p || !b.length) return; const n = b.reduce((x, y) => Math.abs(y - p.t) < Math.abs(x - p.t) ? y : x); move(n - p.t); };
+$('#full').onclick = () => play('full');
+$('#short').onclick = () => play('short');
+$('#stop').onclick = stop;
+$('#span').oninput = drawZoom;
+$('#add').onclick = () => { remember(); const p = point(), t = cursor !== null ? cursor : (p ? p.t + 1 : PRE + 1); const n = { id: nextId++, t, on: true }; song().points.push(n); ptId = n.id; cursor = null; stop(); redraw(); save(); };
+$('#toggle').onclick = () => { const p = point(); if (p) { remember(); p.on = !p.on; redraw(); save(); } };
+$('#del').onclick = () => { const s = song(), p = point(); if (!p) return; stop(); remember(); s.points = s.points.filter(x => x.id !== p.id); ptId = s.points.length ? s.points[0].id : null; redraw(); save(); };
+function undo() {
+  const u = undoStack.pop(); if (!u) return;
+  stop();
+  if (u.cur !== cur) { selectSong(u.cur).then(() => { songs[u.cur].points = u.points; ptId = u.ptId; redraw(); save(); }); return; }
+  song().points = u.points; ptId = u.ptId; redraw(); save();
+}
+$('#undo').onclick = undo;
+$('#reset').onclick = () => {
+  if (!confirm('Вернуть исходные точки для этой песни?')) return;
+  remember(); stop(); cursor = null;
+  song().points = song().defaults.map(t => ({ id: nextId++, t, on: true }));
+  ptId = song().points[0].id; redraw(); save();
+};
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') { e.preventDefault(); undo(); return; }
+  if (e.target.tagName === 'INPUT' && e.target.type !== 'range' && e.target.type !== 'checkbox') return;
+  const step = e.shiftKey ? .1 : .01;
+  if (e.code === 'Space') { e.preventDefault(); playing ? stop() : play('full'); }
+  else if (e.code === 'KeyA') play('short');
+  else if (e.code === 'ArrowLeft') { e.preventDefault(); move(-step); }
+  else if (e.code === 'ArrowRight') { e.preventDefault(); move(step); }
+});
+window.addEventListener('resize', () => { audio.forEach(a => a.over = null); drawOver(); drawZoom(); });
+
+(async () => {
+  const st = await (await fetch('/api/state')).json();
+  PRE = st.pre;
+  songs = st.songs.map(s => ({ ...s, points: s.points.map(p => ({ id: nextId++, t: p.t, on: p.on })) }));
+  await selectSong(0);
+})().catch(e => setStatus('Ошибка: ' + e.message));
+</script>
+</body>
+</html>

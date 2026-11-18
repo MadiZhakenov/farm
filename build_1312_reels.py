@@ -260,8 +260,8 @@ def build(job: dict) -> str:
     ]
     dest = Path(job["out"]) / f"{job['n']:03d}_{ID}.mp4"
     subprocess.run([FF, "-v", "error", "-y", *inputs, "-filter_complex", ";".join(parts), "-map", "[v]", "-map",
-                    f"{ia}:a", "-t", f"{TOTAL}", "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-r", str(FPS),
-                    *SDR_COLOR_ARGS, "-c:a", "aac", "-b:a", "192k", "-map_metadata", "-1", "-movflags", "+faststart",
+                    f"{ia}:a", "-t", f"{TOTAL}", "-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", "27", "-maxrate", "6M", "-bufsize", "12M", "-pix_fmt", "yuv420p", "-r", str(FPS),
+                    *SDR_COLOR_ARGS, "-c:a", "aac", "-b:a", "192k", "-map_metadata", "-1", "-fflags", "+bitexact", "-flags:v", "+bitexact", "-flags:a", "+bitexact", "-metadata:s:v:0", "encoder=", "-metadata:s:v:0", "handler_name=", "-metadata:s:a:0", "handler_name=", "-movflags", "+faststart",
                     str(dest)], check=True)
     return f"{dest.name}: " + " + ".join(f"{p['m']:02d}@{p['a']:.1f}s×{p['len'] / FPS:.2f}" for p in job["pieces"])
 
@@ -274,6 +274,8 @@ def main() -> int:
     ap.add_argument("--test", action="store_true")
     ap.add_argument("--dry", action="store_true")
     ap.add_argument("--only", help="пересобрать только эти номера (через запятую)")
+    ap.add_argument("--from", dest="start", type=int, default=0, help="только ролики с номером > N (доп. партия, план тот же)")
+    ap.add_argument("--out", default=None, help="папка в output/")
     a = ap.parse_args()
     B.banner_anim()
     sound()
@@ -288,7 +290,9 @@ def main() -> int:
         return 0
     if a.test:
         jobs = jobs[:6]
-    out = ROOT / "output" / (f"{ID}_test" if a.test else f"{ID}_{a.count}")
+    if a.start:
+        jobs = [j for j in jobs if j["n"] > a.start]
+    out = ROOT / "output" / (a.out or (f"{ID}_test" if a.test else f"{ID}_{a.count}"))
     out.mkdir(parents=True, exist_ok=True)
     for j in jobs:
         j["out"] = str(out)

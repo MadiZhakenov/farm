@@ -6,6 +6,7 @@ A — зеленоватые (warm), B — сине-зелёные (neutral), C 
 
   python make_1322_wrists.py downloads/1322/wrist/flow_fist.jpg output/1322_pick/002
   python make_1322_wrists.py - output/1322_pick/002 --plain warm.jpg neutral.jpg cool.jpg   # руки уже из Flow
+  python make_1322_wrists.py - out --plain w.jpg n.jpg c.jpg --shared-mask --cut 0.81   # светлая кожа сливается со стеной
 """
 
 from __future__ import annotations
@@ -22,8 +23,10 @@ from PIL import Image
 VEINS = {"a": (-12, 26, 20), "b": (-16, -16, 20), "c": (20, -30, 20)}
 
 
-def arm_mask(rgb: np.ndarray) -> np.ndarray:
-    """Рука = тёплое/насыщенное относительно серо-сиреневой стены; одна самая большая область, без дыр."""
+def arm_mask(rgb: np.ndarray, nails: bool = False) -> np.ndarray:
+    """Рука = тёплое/насыщенное относительно серо-сиреневой стены; одна самая большая область, без дыр.
+    nails — ногти цвета стены (шалфейный лак на сером): внутри выпуклой оболочки кулака порог ниже, иначе
+    кончик ногтя большого пальца вырезается вместе со стеной."""
     lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB).astype(np.float32)
     h, w = rgb.shape[:2]
     edge = np.concatenate([lab[:, :25].reshape(-1, 3), lab[:, -25:].reshape(-1, 3)])
@@ -34,6 +37,18 @@ def arm_mask(rgb: np.ndarray) -> np.ndarray:
     n, lab_, st, _ = cv2.connectedComponentsWithStats(m, 8)
     big = 1 + int(np.argmax(st[1:, 4]))
     m = (lab_ == big).astype(np.uint8)
+    if nails:
+        ys, xs = np.where(m > 0)
+        top = ys.min() + int(0.35 * (ys.max() - ys.min()))           # кулак — верхняя треть руки
+        pts = np.stack([xs[ys < top], ys[ys < top]], 1).astype(np.int32)
+        hull = np.zeros_like(m)
+        cv2.fillConvexPoly(hull, cv2.convexHull(pts), 1)
+        hull = cv2.dilate(hull, np.ones((15, 15), np.uint8))
+        soft = (d > 5).astype(np.uint8) & hull
+        soft = cv2.morphologyEx(soft, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+        m = m | soft
+        n, lab_, st, _ = cv2.connectedComponentsWithStats(m, 8)
+        m = (lab_ == 1 + int(np.argmax(st[1:, 4]))).astype(np.uint8)
     ff = m.copy()
     cv2.floodFill(ff, None, (0, 0), 1)
     m = m | (1 - ff)                                  # заливка дыр
@@ -77,15 +92,23 @@ def main() -> int:
     ap.add_argument("--plain", type=Path, nargs=3, metavar=("WARM", "NEUTRAL", "COOL"),
                     help="три готовые руки из Flow (кожа и вены уже свои) — только вырезать, без перекраски")
     ap.add_argument("--cut", type=float, default=0.835, help="низ кадра (доля высоты) — над манжетой свитера")
+    ap.add_argument("--nails", action="store_true", help="ногти цвета стены — не вырезать их кончики")
+    ap.add_argument("--shared-mask", action="store_true",
+                    help="с --plain: одна маска (самая полная из трёх) на все руки — если поза совпадает")
     args = ap.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     args.out.mkdir(parents=True, exist_ok=True)
     if args.plain:
-        for slot, src in zip("abc", args.plain):
-            rgb = np.asarray(Image.open(src).convert("RGB"))
-            rgb = rgb[: round(rgb.shape[0] * args.cut)]
-            arm = arm_mask(rgb)
+        rgbs = [np.asarray(Image.open(src).convert("RGB")) for src in args.plain]
+        rgbs = [rgb[: round(rgb.shape[0] * args.cut)] for rgb in rgbs]
+        masks = [arm_mask(rgb, args.nails) for rgb in rgbs]
+        if args.shared_mask:                          # поза одна (правки Flow) — маска без «выкусов» на светлой коже
+            best = max(masks, key=lambda m: float((m > 0.5).sum()))
+            iou = [float(((m > 0.5) & (best > 0.5)).sum() / ((m > 0.5) | (best > 0.5)).sum()) for m in masks]
+            print("IoU с общей маской:", " ".join(f"{v:.3f}" for v in iou))
+            masks = [best] * 3
+        for slot, rgb, arm in zip("abc", rgbs, masks):
             ys, xs = np.where(arm > 0.5)
             im = Image.fromarray(rgb).convert("RGBA")
             im.putalpha(Image.fromarray((arm * 255).astype(np.uint8)))

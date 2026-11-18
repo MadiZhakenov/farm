@@ -37,12 +37,33 @@ REF = ROOT / "downloads" / "1322" / "ref"
 FONT = ROOT / "fonts" / "serif" / "Newsreader[opsz,wght].ttf"
 INK = (28, 26, 27)
 BG_TOP, BG_BOT = (240, 234, 237), (231, 225, 225)
+ITALIC = ROOT / "fonts" / "playfair" / "PlayfairDisplay-Italic[wght].ttf"
+# оформление (партия 601–900 «визуально новее»): тема = фон, цвет текста, акцентное кольцо вокруг фото, скруглённые
+# плашки палитр, подписи курсивом, тонкая рамка-паспарту и лёгкое зерно бумаги. "ref" — как было (как в рефе).
+THEMES = {
+    "ref": dict(bg=(BG_TOP, BG_BOT), ink=INK, accent=None, chip_r=0, italic=False, frame=False, grain=0),
+    "cream": dict(bg=((250, 245, 236), (240, 230, 214)), ink=(52, 36, 28), accent=(186, 122, 96), chip_r=10,
+                  italic=True, frame=True, grain=3.0),
+    "sage": dict(bg=((238, 242, 234), (224, 232, 221)), ink=(34, 46, 39), accent=(118, 146, 120), chip_r=10,
+                 italic=True, frame=True, grain=3.0),
+    "lilac": dict(bg=((243, 238, 247), (230, 223, 239)), ink=(44, 32, 58), accent=(146, 120, 182), chip_r=10,
+                  italic=True, frame=True, grain=3.0),
+    "butter": dict(bg=((252, 246, 226), (245, 235, 206)), ink=(58, 44, 22), accent=(204, 158, 66), chip_r=10,
+                   italic=True, frame=True, grain=3.0),
+    "sky": dict(bg=((236, 242, 248), (222, 232, 243)), ink=(26, 38, 60), accent=(108, 140, 186), chip_r=10,
+                italic=True, frame=True, grain=3.0),
+}
+THEME = dict(THEMES["ref"])
 # контент рефа занимает x 115–968, y 204–1600 → вписываем в рамку
 S = 0.93
 REF_TOP, TOP = 204, 205
 
 
-def font(px: float, wght: int = 600) -> ImageFont.FreeTypeFont:
+def font(px: float, wght: int = 600, alt: bool = False) -> ImageFont.FreeTypeFont:
+    if alt and THEME["italic"]:                     # подписи курсивом (новое оформление)
+        f = ImageFont.truetype(str(ITALIC), max(1, round(px * 1.02 * SS)))
+        f.set_variation_by_axes([min(900, max(400, wght - 100))])
+        return f
     f = ImageFont.truetype(str(FONT), max(1, round(px * SS)))
     f.set_variation_by_axes([wght, min(72, max(6, px))])
     return f
@@ -236,9 +257,21 @@ def framed(photo: Image.Image, shape: str, radius: int = 0, pad: int = 26) -> Im
     sh = sh.filter(ImageFilter.GaussianBlur(11)).point(lambda v: int(v * 0.22))
     out = Image.new("RGBA", size, (90, 70, 75, 0))
     out.putalpha(sh)
-    ring = Image.new("RGBA", (w + 8, h + 8), (250, 247, 248, 0))
-    ring.putalpha(m.resize((w + 8, h + 8), Image.Resampling.LANCZOS).point(lambda v: int(v * 0.7)))
-    out.alpha_composite(ring, (pad - 4, pad - 4))
+    if THEME["accent"] is None:
+        ring = Image.new("RGBA", (w + 8, h + 8), (250, 247, 248, 0))
+        ring.putalpha(m.resize((w + 8, h + 8), Image.Resampling.LANCZOS).point(lambda v: int(v * 0.7)))
+        out.alpha_composite(ring, (pad - 4, pad - 4))
+    else:                                            # тонкая акцентная линия с просветом цвета фона
+        for grow, col in ((14, THEME["accent"] + (255,)), (9, THEME["bg"][0] + (255,))):
+            ring = Image.new("RGBA", (w + 2 * grow, h + 2 * grow), col)
+            mm = Image.new("L", ((w + 2 * grow) * 4, (h + 2 * grow) * 4), 0)
+            if shape == "circle":
+                ImageDraw.Draw(mm).ellipse((0, 0, mm.width - 1, mm.height - 1), fill=255)
+            else:
+                ImageDraw.Draw(mm).rounded_rectangle((0, 0, mm.width - 1, mm.height - 1),
+                                                     radius=(radius + grow) * 4, fill=255)
+            ring.putalpha(mm.resize(ring.size, Image.Resampling.LANCZOS))
+            out.alpha_composite(ring, (pad - grow, pad - grow))
     ph = photo.convert("RGBA")
     ph.putalpha(m)
     out.alpha_composite(ph, (pad, pad))
@@ -257,9 +290,11 @@ class Slide:
         e = el.resize((round(el.width * SS), round(el.height * SS)), Image.Resampling.LANCZOS)
         self.im.alpha_composite(e, (round(x * SS), round(y * SS)))
 
-    def text(self, cx: float, top: float, s: str, px: float, wght: int = 600, emoji: str = "") -> float:
-        """Строка по центру cx, верх букв (cap) — top; эмодзи Apple в конце. Возвращает низ (baseline+desc)."""
-        f = font(px, wght)
+    def text(self, cx: float, top: float, s: str, px: float, wght: int = 600, emoji: str = "",
+             alt: bool = False) -> float:
+        """Строка по центру cx, верх букв (cap) — top; эмодзи Apple в конце. Возвращает низ (baseline+desc).
+        alt — второстепенная строка (в новом оформлении курсивом)."""
+        f = font(px, wght, alt)
         tw = f.getlength(s)
         epx = round(px * 1.05 * SS)
         e = A._apple_emoji_rgba(emoji, epx) if emoji else None
@@ -267,7 +302,7 @@ class Slide:
         total = tw + gap + (e.width if e is not None else 0)
         x = cx * SS - total / 2
         base = top * SS + 0.72 * px * SS
-        self.d.text((x, base), s, font=f, fill=INK, anchor="ls")
+        self.d.text((x, base), s, font=f, fill=THEME["ink"], anchor="ls")
         if e is not None:
             self.im.alpha_composite(e, (round(x + tw + gap), round(base - e.height * 0.82)))
         bb = self.d.textbbox((x, base), s, font=f, anchor="ls")
@@ -278,7 +313,7 @@ class Slide:
         for k, c in enumerate(colors):
             sx, sy = x + (k % cols) * (size + gap), y + (k // cols) * (size + gap)
             self.d.rounded_rectangle((sx * SS, sy * SS, (sx + size) * SS - 1, (sy + size) * SS - 1),
-                                     radius=radius * SS, fill=c)
+                                     radius=max(radius, THEME["chip_r"] * size / 122) * SS, fill=c)
 
     def dots(self, x: float, y: float, colors: list, dia: float, gap: float) -> None:
         for k, c in enumerate(colors):
@@ -286,11 +321,22 @@ class Slide:
             self.d.ellipse((sx * SS, y * SS, (sx + dia) * SS, (y + dia) * SS), fill=c)
 
     def render(self) -> tuple[Image.Image, list[tuple[int, int, int, int]]]:
+        top_c, bot_c = THEME["bg"]
         bg = Image.new("RGB", (1, H))
         for yy in range(H):
             t = yy / (H - 1)
-            bg.putpixel((0, yy), tuple(round(a + (b - a) * t) for a, b in zip(BG_TOP, BG_BOT)))
-        bg = bg.resize((W, H)).convert("RGBA")
+            bg.putpixel((0, yy), tuple(round(a + (b - a) * t) for a, b in zip(top_c, bot_c)))
+        bg = bg.resize((W, H))
+        if THEME["grain"]:                           # лёгкое зерно бумаги
+            g = np.random.default_rng(len(self.text_boxes) * 7919 + 13).normal(0, THEME["grain"], (H, W, 1))
+            bg = Image.fromarray(np.clip(np.asarray(bg, np.float32) + g, 0, 255).astype(np.uint8))
+        bg = bg.convert("RGBA")
+        if THEME["frame"]:                           # тонкая рамка-паспарту по краю безопасной зоны
+            col = THEME["ink"] + (60,)
+            fl = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            ImageDraw.Draw(fl).rounded_rectangle((X0 - 70, Y0 - 70, X1 + 70, Y1 + 170), radius=36, outline=col,
+                                                 width=2)
+            bg.alpha_composite(fl)
         cw, ch = round(W * S), round(H * S)
         layer = self.im.resize((cw, ch), Image.Resampling.LANCZOS)
         ox, oy = round(540 - 540 * S), round(TOP - REF_TOP * S)
@@ -351,7 +397,7 @@ def ref_grade(photo: Image.Image, ref_box: tuple[int, int, int, int], ref_slide:
 def slide1() -> Slide:
     sl = Slide()
     sl.text(540, 210, "Let's find out your personal color", 49, 600, emoji="✨")
-    sl.text(540, 282, "(results in the last slides)", 34, 450)
+    sl.text(540, 282, "(results in the last slides)", 34, 450, alt=True)
     for name, box, (cx, ty) in SEASONS:
         if name.lower() in SET:
             zoom, drop = circle_frame(SET[name.lower()], name.lower()) or CIRCLE_FRAME[name.lower()]
@@ -385,7 +431,7 @@ def slide2() -> Slide:
             sl.paste(cut_rect(2, box), box[0] - 18, box[1] - 18)
         cx = box[0] + box[2] / 2
         sl.text(cx, 1273, lab, 40, 600)
-        sl.text(cx, 1330, sub, 26, 600)
+        sl.text(cx, 1330, sub, 26, 600, alt=True)
         cols = [sample(2, dx + 17 + round(k * 39.5), 1386, 5) for k in range(3)]
         sl.dots(cx - (3 * 34 + 2 * 5.5) / 2, 1369, cols, 34, 5.5)          # точки — по центру под подписью
     return sl
@@ -435,7 +481,7 @@ RESULTS = [(5, "CBA · CBC", "true summer", "TRUE SUMMER"),
 def slide_result(i: int, code: str, low: str, caps: str) -> Slide:
     sl = Slide()
     sl.text(540, 215, code, 65, 600)
-    sl.text(540, 300, low, 47, 500)
+    sl.text(540, 300, low, 47, 500, alt=True)
     if f"card_{i}" in SET:
         sl.paste(framed(frame_portrait(SET[f"card_{i}"], 812, 834, 2.3, 0.22), "rect", 34), 134 - 26, 410 - 26)
     else:
@@ -450,6 +496,19 @@ def slide_result(i: int, code: str, low: str, caps: str) -> Slide:
 
 def slide8() -> Slide:
     sl = Slide()
+    if "screen" in SET:              # партия 301–600: телефон с настоящим экраном анализа Inspoy (скрины клиента)
+        import make_1329_s5_collage as K
+        y = 215
+        for ln in ("Your code", "isn't here?"):
+            y = sl.text(540, y, ln, 80, 700) + 24
+        y += 16
+        for ln in ("Inspoy finds your season", "from one selfie"):
+            y = sl.text(540, y, ln, 44, 500, alt=True) + 14
+        ph = K.phone(SET["screen"], 760)
+        sl.paste(ph, 540 - ph.width / 2, y + 36)
+        card = C1319.app_card(540)
+        sl.paste(card, 540 - card.width / 2, y + 36 + ph.height + 28)
+        return sl
     y = 600
     for ln in ("Your code", "isn't here?"):
         y = sl.text(540, y, ln, 90, 700) + 30
@@ -473,6 +532,11 @@ SLOTS = ["winter", "spring", "summer", "autumn", "wrist_a", "wrist_b", "wrist_c"
 EXTS = (".jpg", ".jpeg", ".png", ".webp")
 
 
+def lib_slots() -> list[str]:
+    """Слоты библиотеки; screen (экран Inspoy на слайде 8) — только если в библиотеке есть такая папка."""
+    return SLOTS + (["screen"] if (LIB / "screen").is_dir() else [])
+
+
 def person(p: Path) -> str:
     return p.stem.split("__")[0]
 
@@ -481,7 +545,8 @@ def plan_lib(n: int, seed: int) -> list[dict[str, Path]]:
     """n уникальных наборов: в каждом слоте — реже всего использованная картинка (с шумом), человек не повторяется."""
     import random
     rng = random.Random(seed)
-    lib = {sl: sorted(f for f in (LIB / sl).iterdir() if f.suffix.lower() in EXTS) for sl in SLOTS}
+    slots = lib_slots()
+    lib = {sl: sorted(f for f in (LIB / sl).iterdir() if f.suffix.lower() in EXTS) for sl in slots}
     empty = [sl for sl, v in lib.items() if not v]
     if empty:
         raise SystemExit(f"пустые слоты: {empty}")
@@ -490,13 +555,17 @@ def plan_lib(n: int, seed: int) -> list[dict[str, Path]]:
     for _ in range(n):
         for _try in range(500):
             pick, people = {}, set()
-            for sl in sorted(SLOTS, key=lambda x: len(lib[x])):
+            for sl in sorted(slots, key=lambda x: len(lib[x])):
                 cand = [f for f in lib[sl] if not (person(f) in people and "__" in f.stem)]
+                same = [f for f in cand if sl in ("wrist_b", "wrist_c") and "wrist_a" in pick
+                        and f.name == pick["wrist_a"].name]
+                if same:                              # три руки из одного набора (одна и та же рука в трёх оттенках)
+                    cand = same
                 f = min(cand, key=lambda f: use.get(f, 0) + rng.random() * 0.9)
                 pick[sl] = f
                 if "__" in f.stem:
                     people.add(person(f))
-            key = tuple(pick[sl] for sl in SLOTS)
+            key = tuple(pick[sl] for sl in slots)
             if key not in seen:
                 break
         else:
@@ -508,8 +577,10 @@ def plan_lib(n: int, seed: int) -> list[dict[str, Path]]:
     return out
 
 
-def render_one(job: tuple[int, dict, str, str | None, str]) -> str:
-    i, pick, out, flat, flat_id = job
+def render_one(job: tuple[int, dict, str, str | None, str, str]) -> str:
+    i, pick, out, flat, flat_id, theme = job
+    THEME.clear()
+    THEME.update(THEMES[theme])
     SET.clear()
     SET.update({k: Path(v) for k, v in pick.items()})
     d = Path(out) / f"{i:03d}"
@@ -533,26 +604,46 @@ def main() -> int:
     ap.add_argument("--flat", type=Path, help="ещё и одной папкой: sort_<слайд>_<карусель>_<id>.jpg")
     ap.add_argument("--flat-id", default="1322")
     ap.add_argument("--jobs", type=int, default=4)
+    ap.add_argument("--offset", type=int, default=0, help="нумерация с offset+1 (новая библиотека 301–600: --offset 300)")
+    ap.add_argument("--lib", type=Path, help="другая библиотека (по умолчанию output/1322_lib; 301–600 — output/1322_lib3)")
     ap.add_argument("--seed", type=int, default=1322)
+    ap.add_argument("--themes", default="ref", help="оформление по кругу, через запятую: ref,cream,sage,lilac,butter,sky "
+                                                   "(601–900: cream,sage,lilac,butter,sky — по 60)")
+    ap.add_argument("--skip", type=int, default=0, help="продолжение партии: план на skip+n, рендер только с №skip+1 "
+                                                        "(первые skip совпадают с уже сделанными при том же seed)")
     args = ap.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+    global LIB
+    if args.lib:
+        LIB = args.lib
     if args.n:
         import json
         from collections import Counter
         from concurrent.futures import ProcessPoolExecutor
-        picks = plan_lib(args.n, args.seed)
+        picks = plan_lib(args.skip + args.n, args.seed)
+        old = args.out / "manifest.json"
+        if args.skip and old.exists():      # уже сделанные должны совпасть с началом плана — иначе возможны дубли
+            done = json.loads(old.read_text(encoding="utf-8"))[:args.skip]
+            same = sum({k: v for k, v in d.items() if k != "theme"} == {"carousel": f"{i:03d}", **{k: v.name for k, v in p.items()}}
+                       for i, (d, p) in enumerate(zip(done, picks), 1))
+            print(f"сверка с {old.name}: {same}/{len(done)} первых наборов совпали")
+            if same != len(done):
+                raise SystemExit("план разошёлся с уже сделанными — библиотека менялась")
         args.out.mkdir(parents=True, exist_ok=True)
         if args.flat:
             args.flat.mkdir(parents=True, exist_ok=True)
+        themes = args.themes.split(",")
+        theme_of = {i: themes[(i - 1 - args.offset) % len(themes)] for i in range(1 + args.offset, len(picks) + 1 + args.offset)}
         (args.out / "manifest.json").write_text(json.dumps(
-            [{"carousel": f"{i:03d}", **{k: v.name for k, v in p.items()}} for i, p in enumerate(picks, 1)],
+            [{"carousel": f"{i:03d}", "theme": theme_of[i], **{k: v.name for k, v in p.items()}}
+             for i, p in enumerate(picks, 1 + args.offset)],
             indent=1, ensure_ascii=False), encoding="utf-8")
-        for sl in SLOTS:
+        for sl in lib_slots():
             c = Counter(p[sl].name for p in picks)
             print(f"{sl}: {len(c)} картинок, повторов {min(c.values())}–{max(c.values())}")
         jobs = [(i, {k: str(v) for k, v in p.items()}, str(args.out), str(args.flat) if args.flat else None,
-                 args.flat_id) for i, p in enumerate(picks, 1)]
+                 args.flat_id, theme_of[i]) for i, p in enumerate(picks, 1 + args.offset) if i > args.skip + args.offset]
         with ProcessPoolExecutor(args.jobs) as ex:
             for k, name in enumerate(ex.map(render_one, jobs), 1):
                 print(f"[{k}/{len(jobs)}] {name}", flush=True)

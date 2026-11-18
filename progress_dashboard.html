@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Прогресс генерации</title>
+<style>
+:root {
+  --bg: #f6f7f9; --card: #ffffff; --text: #16181d; --muted: #6b7280; --line: #e5e7eb;
+  --bar: #e9ecf1; --fill: #2f6fec; --done: #1a9e5a; --warn: #c27c0e;
+  --series: #2a78d6; --area: rgba(42, 120, 214, .14); --grid: #eceef2; --axis: #898781;
+  --good: #0ca30c; --warning: #fab219; --critical: #d03b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111317; --card: #1a1d23; --text: #e8eaee; --muted: #9aa1ad; --line: #2a2e36;
+    --bar: #262a32; --fill: #5b8cff; --done: #34c27a; --warn: #e3a33c;
+    --series: #3987e5; --area: rgba(57, 135, 229, .18); --grid: #262a31; --axis: #898781;
+  }
+}
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 980px; margin: 0 auto; padding: 20px 16px 40px; }
+header { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: baseline; margin-bottom: 14px; }
+h1 { font-size: 20px; margin: 0; }
+.meta { color: var(--muted); font-size: 13px; }
+h2 { font-size: 15px; margin: 22px 0 8px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 8px; }
+.row { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.name { font-weight: 600; word-break: break-all; }
+.nums { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sub { color: var(--muted); font-size: 12px; margin-top: 2px; word-break: break-all; }
+.bar { height: 8px; background: var(--bar); border-radius: 5px; overflow: hidden; margin-top: 8px; }
+.bar > i { display: block; height: 100%; background: var(--fill); border-radius: 5px; transition: width .6s; }
+.bar.done > i { background: var(--done); }
+.pill { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 9px; background: var(--bar); color: var(--muted); margin-left: 6px; }
+.pill.live { background: var(--fill); color: #fff; }
+.empty { color: var(--muted); padding: 8px 2px; }
+.hint { color: var(--muted); font-size: 13px; margin: -2px 0 10px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px; }
+.tile { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px 10px; position: relative; }
+.tile .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.tile .ttl { font-weight: 600; }
+.tile .what { color: var(--muted); font-size: 12px; margin-top: 1px; min-height: 17px; }
+.tile .big { font-size: 30px; font-weight: 650; font-variant-numeric: tabular-nums; margin: 6px 0 0; line-height: 1.1; }
+.tile .big small { font-size: 14px; font-weight: 500; color: var(--muted); margin-left: 4px; }
+.tile .det { color: var(--muted); font-size: 12px; min-height: 17px; font-variant-numeric: tabular-nums; }
+.st { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 9px; white-space: nowrap; color: #fff; }
+.st.free { background: var(--good); }
+.st.work { background: var(--bar); color: var(--text); }
+.st.busy { background: var(--warning); color: #0b0b0b; }
+.st.max { background: var(--critical); }
+.plot { position: relative; height: 74px; margin-top: 8px; touch-action: pan-y; cursor: crosshair; }
+.plot svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.plot .cross { position: absolute; top: 0; bottom: 14px; width: 1px; background: var(--axis); opacity: .6; display: none; pointer-events: none; }
+.plot .dot { position: absolute; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%; background: var(--series);
+  box-shadow: 0 0 0 2px var(--card); display: none; pointer-events: none; }
+.tip { position: absolute; z-index: 2; background: var(--text); color: var(--card); font-size: 12px; padding: 4px 8px; border-radius: 6px;
+  white-space: nowrap; pointer-events: none; display: none; transform: translate(-50%, -100%); margin-top: -8px; }
+.axis { display: flex; justify-content: space-between; color: var(--axis); font-size: 11px; margin-top: -12px; }
+.sum { color: var(--muted); font-size: 12px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Прогресс генерации</h1>
+    <span class="meta" id="meta">загрузка…</span>
+  </header>
+  <h2>Загрузка компьютера</h2>
+  <p class="hint">Чем выше синий график — тем сильнее занята эта часть компьютера. Если что-то долго «на пределе», генерации идут медленнее. Наведи на график — покажет время и значение.</p>
+  <section id="sys" class="tiles"></section>
+  <h2>Сейчас идёт</h2>
+  <section id="jobs"></section>
+  <h2>Папки за сутки</h2>
+  <section id="folders"></section>
+</main>
+<script>
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const ago = (now, t) => { if (!t) return "—"; const s = Math.max(0, now - t); return s < 60 ? `${Math.round(s)} с назад` : s < 3600 ? `${Math.round(s / 60)} мин назад` : `${(s / 3600).toFixed(1)} ч назад`; };
+const clock = (now, min) => { const d = new Date((now + min * 60) * 1000); return d.toLocaleTimeString("ru-RU", {hour: "2-digit", minute: "2-digit"}); };
+function bar(done, target) {
+  if (!target) return "";
+  const p = Math.min(100, 100 * done / target);
+  return `<div class="bar ${p >= 100 ? "done" : ""}"><i style="width:${p.toFixed(1)}%"></i></div>`;
+}
+async function tick() {
+  try {
+    const r = await fetch("/api/status", {cache: "no-store"});
+    const s = await r.json();
+    drawSys(s.sys);
+    document.getElementById("meta").textContent =
+      `обновлено ${new Date(s.now * 1000).toLocaleTimeString("ru-RU")} · CPU ${Math.round(s.cpu)}% · ffmpeg: ${s.ffmpeg}`;
+    const J = document.getElementById("jobs");
+    J.innerHTML = s.jobs.length ? s.jobs.map(j => {
+      const cpu = j.cpu != null ? ` · процессор ${Math.round(j.cpu)}%` : "";
+      if (j.kind === "other") {
+        return `<div class="card"><div class="row"><span class="name">${esc(j.script)}<span class="pill live">идёт</span></span>
+          <span class="nums">работает</span></div>
+          <div class="sub">${esc(j.args || "")}${cpu} · запущен ${ago(s.now, j.started)}</div></div>`;
+      }
+      const stage = j.stage ? `${esc(j.stage)} · ` : "";
+      const tgt = j.target ? ` из ${j.target}` : " готово";
+      const pct = j.target ? ` · ${Math.min(100, Math.round(100 * j.done / j.target))}%` : "";
+      const eta = j.eta_min != null ? ` · осталось ~${Math.ceil(j.eta_min)} мин (к ${clock(s.now, j.eta_min)})` : "";
+      return `<div class="card"><div class="row"><span class="name">${esc(j.script)}<span class="pill live">идёт</span></span>
+        <span class="nums">${j.done}${tgt}${pct}</span></div>
+        <div class="sub">${stage}${esc(j.dirs.join(", ") || "папка ещё не создана")} · ${j.rate}/мин${eta}${cpu} · запущен ${ago(s.now, j.started)}</div>
+        ${bar(j.done, j.target)}</div>`;
+    }).join("") : `<div class="empty">ничего не генерируется</div>`;
+    const F = document.getElementById("folders");
+    F.innerHTML = s.folders.length ? s.folders.map(f => {
+      const tgt = f.target ? ` / ${f.target}` : "";
+      const extra = f.per > 1 ? ` · ${f.files} файлов по ${f.per}` : "";
+      const pill = f.redo ? '<span class="pill live">пересобирается</span>' : f.active ? '<span class="pill live">пишется</span>' : "";
+      return `<div class="card"><div class="row"><span class="name">${esc(f.name)}${pill}</span>
+        <span class="nums">${f.done}${tgt} ${esc(f.kind)}</span></div>
+        <div class="sub">последний файл ${ago(s.now, f.last)}${extra}</div>${bar(f.done, f.target)}</div>`;
+    }).join("") : `<div class="empty">за сутки ничего</div>`;
+  } catch (e) {
+    document.getElementById("meta").textContent = "нет связи с progress_server.py";
+  }
+}
+// ---------------------------------------------------------------- загрузка компьютера
+const WINDOW = 600;                                       // графики — последние 10 минут
+const TILES = [
+  {id: "cpu", title: "Процессор", what: "рисует кадры, текст, склеивает видео",
+   pct: h => h.cpu, show: h => `${Math.round(h.cpu)} %`, det: () => ""},
+  {id: "gpu", title: "Видеокарта", what: "собирает и читает видео",
+   pct: h => h.gpu == null ? null : Math.max(h.gpu, h.enc, h.dec), show: h => `${Math.round(Math.max(h.gpu, h.enc, h.dec))} %`,
+   det: h => h.gpu == null ? "нет данных" : `сборка ${Math.round(h.enc)} % · чтение ${Math.round(h.dec)} % · ${Math.round(h.temp)}°`},
+  {id: "vram", title: "Память видеокарты", what: "больше 6 ГБ — риск зависания",
+   pct: (h, s) => h.vram == null ? null : 100 * h.vram / s.vram_total,
+   show: (h, s) => `${h.vram.toFixed(1)}<small>из ${s.vram_total} ГБ</small>`, det: () => ""},
+  {id: "ram", title: "Оперативная память", what: "сколько памяти заняли программы",
+   pct: (h, s) => 100 * h.ram / s.ram_total, show: (h, s) => `${h.ram.toFixed(1)}<small>из ${s.ram_total} ГБ</small>`, det: () => ""},
+];
+function level(p) {                                       // слово + значок: смысл не держится на одном цвете
+  if (p == null) return ["work", "· нет данных"];
+  if (p >= 92) return ["max", "■ на пределе"];
+  if (p >= 80) return ["busy", "▲ загружен"];
+  if (p >= 45) return ["work", "● работает"];
+  return ["free", "✓ свободно"];
+}
+let SYS = null;
+const hover = {};
+function buildTiles() {
+  document.getElementById("sys").innerHTML = TILES.map(t => `<div class="tile" id="t-${t.id}" role="group">
+      <div class="top"><span class="ttl">${t.title}</span><span class="st"></span></div>
+      <div class="what">${t.what}</div>
+      <div class="big">—</div><div class="det"></div>
+      <div class="plot"><svg aria-hidden="true"></svg><div class="cross"></div><div class="dot"></div><div class="tip"></div></div>
+      <div class="axis"><span>10 мин назад</span><span>5 мин</span><span>сейчас</span></div>
+      <div class="sum"></div></div>`).join("");
+  for (const t of TILES) {
+    const plot = document.querySelector(`#t-${t.id} .plot`);
+    const move = e => {
+      const r = plot.getBoundingClientRect();
+      const x = (e.touches ? e.touches[0].clientX : e.clientX) - r.left;
+      hover[t.id] = Math.max(0, Math.min(r.width, x));
+      drawHover(t);
+    };
+    const leave = () => { delete hover[t.id]; drawHover(t); };
+    plot.addEventListener("mousemove", move);
+    plot.addEventListener("touchstart", move, {passive: true});
+    plot.addEventListener("touchmove", move, {passive: true});
+    plot.addEventListener("mouseleave", leave);
+    plot.addEventListener("touchend", leave);
+  }
+}
+function series(t) {
+  return SYS.hist.map(h => ({t: h.t, h, p: t.pct(h, SYS)})).filter(o => o.p != null && isFinite(o.p));
+}
+function geom(plot, now) {
+  const w = plot.clientWidth, h = plot.clientHeight - 14;   // снизу 14 px — подписи времени
+  return {w, h, x: tt => w * (1 - (now - tt) / WINDOW), y: p => h * (1 - Math.min(100, Math.max(0, p)) / 100)};
+}
+function drawTile(t) {
+  const now = SYS.now, el = document.getElementById(`t-${t.id}`);
+  const pts = series(t), last = pts[pts.length - 1];
+  const [cls, word] = level(last ? last.p : null);
+  const st = el.querySelector(".st");
+  st.className = `st ${cls}`;
+  st.textContent = word;
+  el.querySelector(".big").innerHTML = last ? t.show(last.h, SYS) : "—";
+  el.querySelector(".det").textContent = last ? t.det(last.h, SYS) : "";
+  const plot = el.querySelector(".plot"), g = geom(plot, now);
+  const vis = pts.filter(o => now - o.t <= WINDOW);
+  let body = [0, 50, 100].map(v => `<line x1="0" x2="${g.w}" y1="${g.y(v)}" y2="${g.y(v)}" stroke="var(--grid)" stroke-width="1"/>`).join("")
+    + `<text x="2" y="${g.y(100) + 10}" font-size="10" fill="var(--axis)">100 %</text>`
+    + `<text x="2" y="${g.y(50) - 3}" font-size="10" fill="var(--axis)">50 %</text>`;
+  if (vis.length > 1) {
+    const line = vis.map((o, i) => `${i ? "L" : "M"}${g.x(o.t).toFixed(1)},${g.y(o.p).toFixed(1)}`).join("");
+    const area = `${line}L${g.x(vis[vis.length - 1].t).toFixed(1)},${g.h}L${g.x(vis[0].t).toFixed(1)},${g.h}Z`;
+    body += `<path d="${area}" fill="var(--area)"/>`
+      + `<path d="${line}" fill="none" stroke="var(--series)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  }
+  plot.querySelector("svg").innerHTML = body;
+  const ps = vis.map(o => o.p);
+  el.querySelector(".sum").textContent = ps.length > 2
+    ? `за 10 мин: в среднем ${Math.round(ps.reduce((a, b) => a + b, 0) / ps.length)} %, пик ${Math.round(Math.max(...ps))} %`
+    : "копим историю…";
+  el.setAttribute("aria-label", `${t.title}: ${el.querySelector(".big").textContent}, ${word}. ${el.querySelector(".sum").textContent}`);
+  drawHover(t);
+}
+function drawHover(t) {
+  const plot = document.querySelector(`#t-${t.id} .plot`);
+  const [cross, dot, tip] = ["cross", "dot", "tip"].map(c => plot.querySelector(`.${c}`));
+  const hide = () => { cross.style.display = dot.style.display = tip.style.display = "none"; };
+  const pts = SYS ? series(t) : [];
+  if (hover[t.id] == null || !pts.length) return hide();
+  const g = geom(plot, SYS.now);
+  const tt = SYS.now - WINDOW * (1 - hover[t.id] / g.w);
+  const o = pts.reduce((a, b) => Math.abs(b.t - tt) < Math.abs(a.t - tt) ? b : a);
+  if (SYS.now - o.t > WINDOW || Math.abs(o.t - tt) > 30) return hide();
+  const x = g.x(o.t), y = g.y(o.p);
+  cross.style.left = `${x}px`;
+  dot.style.left = `${x}px`;
+  dot.style.top = `${y}px`;
+  const val = t.id === "vram" ? `${o.h.vram.toFixed(1)} ГБ` : t.id === "ram" ? `${o.h.ram.toFixed(1)} ГБ` : `${Math.round(o.p)} %`;
+  tip.textContent = `${new Date(o.t * 1000).toLocaleTimeString("ru-RU")} — ${val}`;
+  tip.style.left = `${Math.min(g.w - 62, Math.max(62, x))}px`;
+  tip.style.top = `${y}px`;
+  cross.style.display = dot.style.display = tip.style.display = "block";
+}
+function drawSys(s) {
+  if (!s || !s.hist) return;
+  if (!document.getElementById("t-cpu")) buildTiles();
+  SYS = Object.assign({}, s, {now: s.hist.length ? s.hist[s.hist.length - 1].t : Date.now() / 1000});
+  TILES.forEach(drawTile);
+}
+window.addEventListener("resize", () => SYS && TILES.forEach(drawTile));
+tick();
+setInterval(tick, 4000);
+</script>
+</body>
+</html>
