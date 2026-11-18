@@ -38,6 +38,10 @@ from pathlib import Path
 
 import numpy as np
 
+from core import hw as _hw
+
+HW_MODE = _hw.install()          # без NVIDIA (ноутбук): команды ffmpeg ниже переводятся на Quick Sync/процессор
+
 # цвет bt709 помечаем в самом потоке (h264_metadata): выходные «-colorspace/-color_primaries/-color_trc» вставляют
 # перевод цвета на процессоре и ломают сборку на видеокарте (проверено 13.11)
 NVENC = ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", "27", "-maxrate", "6M", "-bufsize", "12M",

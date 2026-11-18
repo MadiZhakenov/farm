@@ -18,11 +18,17 @@ Inspoy «the EXACT day I moved on from him» v2 (18.11, «максимальны
 
   python build_inspoy_moveon_v2.py --test 4                    # → output/inspoy_moveon_v2_test
   python build_inspoy_moveon_v2.py --yt 200 --tt 100 --jobs 6  # → output/inspoy_moveon_1_YT_200, _TT_100
+
+Две машины (18.11, core/farm_node.py): тот же запуск на ПК и на ноутбуке (из общей папки \\\\WIN-22OHGHD63MT\\farm) —
+ролики раздаются заявками (_claims), банк общий (acc/*.npy под общим замком), промежуточные файлы ноутбука — на его
+диске. --run NAME — отдельная партия (свои папки и acc_NAME; сданные acc/ — в банке как прошлые).
+  python build_inspoy_moveon_v2.py --run 2m --yt 40 --jobs 6   # на обеих машинах одной и той же командой
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import io
 import json
 import math
@@ -45,6 +51,8 @@ sys.path.insert(0, str(ROOT))
 import build_inspoy_moveon as BM  # noqa: E402
 import build_dad_trucker_carousels as DT  # noqa: E402
 import core.gpu_ffmpeg as G  # noqa: E402
+from core import farm_node as NODE  # noqa: E402
+from core import hw as HW  # noqa: E402
 from core.gpu_slots import gpu_slot  # noqa: E402
 
 W, H, FPS = 1080, 1920, 30
@@ -54,7 +62,8 @@ WORK = ROOT / "output" / "_work" / "moveon_v2"
 TPL = WORK / "tpl"
 ACC = WORK / "acc"                                       # отпечатки принятых роликов (перезапуск без пересчёта)
 OLD_BANK = WORK / "old_bank.npz"
-PROG = ROOT / "output" / "_work" / "_qa_progress" / f"{os.getpid()}.json"
+JOBS_DIR = NODE.local_dir(WORK / "jobs")                 # промежуточные файлы ролика — на диске этой машины
+RUN = ""                                                 # --run NAME → "NAME_": свои папки ролика и планы
 TOTAL_S = 9.0
 NF = int(TOTAL_S * FPS)
 THR, ACC_MAX = 40, 2
@@ -183,12 +192,13 @@ N_PAGES = [b - a for a, b in zip(FB, FB[1:])]           # 6 серых + 5 яр�
 assert len(N_PAGES) == 11 and sum(N_PAGES) + N_FACE == NF, (N_FACE, N_PAGES)
 
 
+_PROG: list = []
+
+
 def prog(stage: str, done: int = 0, total: int | None = None) -> None:
-    try:
-        PROG.parent.mkdir(parents=True, exist_ok=True)
-        PROG.write_text(json.dumps(dict(stage=stage, done=done, total=total), ensure_ascii=False), encoding="utf-8")
-    except OSError:
-        pass
+    if not _PROG:
+        _PROG.append(NODE.Progress(Path(__file__).name))
+    _PROG[0](stage, done, total)
 
 
 # ---------------- шаблоны страниц (браузер — один раз) ----------------
@@ -314,7 +324,7 @@ def text_img(kind: str, cy: float) -> tuple[Image.Image, int, int]:
     key = (kind, round(cy, 3))
     with TEXT_LOCK:
         if key not in _TXT:
-            dest = WORK / "txt" / f"{kind}_{key[1]:.3f}_{os.getpid()}.png"   # свой файл у процесса (параллельные части)
+            dest = NODE.local_dir(WORK / "txt") / f"{kind}_{key[1]:.3f}_{os.getpid()}.png"   # свой файл у процесса (параллельные части)
             dest.parent.mkdir(parents=True, exist_ok=True)
             x, y, _, _ = BM.text_layer(BM.HOOK if kind == "hook" else BM.SWITCH, cy, dest)
             _TXT[key] = (Image.open(dest).convert("RGBA"), x, y)
@@ -454,8 +464,9 @@ import torch.nn.functional as TF  # noqa: E402
 from torchvision.ops import roi_align  # noqa: E402
 
 import torch  # noqa: E402
-GDEV = "cuda" if torch.cuda.is_available() else "cpu"
-GPU_SEM = threading.BoundedSemaphore(3)                # склеек на видеокарте одновременно (память)
+GDEV = HW.device()                                     # cuda → xpu (Arc ноутбука) → cpu
+# склеек на видеокарте одновременно (память); Arc ноутбука (xpu) — по одной: из нескольких потоков падал (0xC0000005)
+GPU_SEM = threading.BoundedSemaphore(int(os.environ.get("MV_GPU_SEM", "1" if GDEV == "xpu" else "3")))
 
 
 def _tt(im: Image.Image) -> torch.Tensor:
@@ -722,8 +733,8 @@ def hash_of(H_: np.ndarray) -> np.ndarray:
 # ---------------- банк (видеокарта, half) ----------------
 import torch  # noqa: E402
 
-BDEV = "cuda" if torch.cuda.is_available() else "cpu"
-BDT = torch.half if BDEV == "cuda" else torch.float32
+BDEV = HW.device()
+BDT = torch.half if HW.half_ok() else torch.float32
 BANK_LOCK = threading.Lock()
 
 
@@ -861,11 +872,14 @@ class Ctx:
         self.done = 0
         self.stat = dict(pred_rej=0, real_rej=0, bad=0, fr=0)
         self.lock = threading.Lock()
+        self.t_sync = 0.0
 
-    def sync(self) -> None:
-        """Подтянуть в банк ролики, принятые соседними процессами (acc/*.npy) — уникальность между процессами."""
-        if not ACC.exists():
+    def sync(self, force: bool = True) -> None:
+        """Подтянуть в банк ролики, принятые соседними процессами и другой машиной (acc/*.npy). force=False — не чаще
+        раза в 2 с (перебор прогноза: по сети список папки — десятки мс)."""
+        if not ACC.exists() or (not force and time.time() - self.t_sync < 2.0):
             return
+        self.t_sync = time.time()
         for f in ACC.glob("*.npy"):
             if f.name not in self.loaded:
                 try:
@@ -875,10 +889,15 @@ class Ctx:
                     pass
 
 
+def _save_npy(path: Path, a: np.ndarray) -> None:
+    with open(path, "wb") as fh:                           # np.save(путь) дописал бы .npy к временному имени
+        np.save(fh, a)
+
+
 def build_one(ctx: Ctx, tag: str, i: int, girl: str) -> str:
     name = f"inspoy_moveon_{tag}_{i:03d}_1.mp4"
     dest = ctx.out[tag] / name
-    keep = WORK / "jobs" / f"{tag}_{i:03d}"
+    keep = JOBS_DIR / f"{RUN}{tag}_{i:03d}"
     for att in range(int(os.environ.get("MV_ATT", "16"))):
         if keep.exists():
             shutil.rmtree(keep, ignore_errors=True)
@@ -896,7 +915,7 @@ def build_one(ctx: Ctx, tag: str, i: int, girl: str) -> str:
             fails, ffails = [0] * 11, [0] * 3
             for _rnd in range(80):                         # прогноз (миллисекунды на видеокарте): перебор совпавшего
                 with BANK_LOCK:
-                    ctx.sync()
+                    ctx.sync(force=False)
                     bank = ctx.bank.t
                 hit, rev = near_mask_t(bits_t(all_cells(pl)), bank, THR_PRED)
                 if max(int(hit.sum()), rev) <= ACC_MAX:
@@ -944,8 +963,8 @@ def build_one(ctx: Ctx, tag: str, i: int, girl: str) -> str:
                 pl["_pages_g"] = torch.stack([pl["_pr"][k] for k in range(11)]).cpu().numpy()
         for k_ in ("_pg", "_pc", "_pr", "_fd", "_la", "_lc", "_layer_rgba", "_fc", "_fr"):
             pl.pop(k_, None)
-        if GDEV == "cuda":                                 # кэш перебора не держим: при > лимита gpu_slot ждёт вечно
-            torch.cuda.empty_cache()                       # (18.11: 7,5 ГБ у одного добора — сборка встала)
+        HW.empty_cache()                                   # кэш перебора не держим: при > лимита gpu_slot ждёт вечно
+                                                           # (18.11: 7,5 ГБ у одного добора — сборка встала)
         if not ok:
             print(f"  {name} попытка {att}: прогноз не сошёлся за 80 кругов", flush=True)
             continue
@@ -960,27 +979,30 @@ def build_one(ctx: Ctx, tag: str, i: int, girl: str) -> str:
             print(f"  {name} попытка {att}: bad {bad[:4]} кадры {fr[:4]}", flush=True)
             continue
         hr = hash_of(H_)
-        with BANK_LOCK:
+        part = Path(str(dest) + f".part_{NODE.HOST}")
+        shutil.move(str(tmp), str(part))                   # копия по сети — до замка банка
+        # порядок замков везде один: видеоядро (Arc) → банк → общий замок (иначе потоки ждут друг друга по кругу)
+        with (GPU_SEM if GDEV == "xpu" else contextlib.nullcontext()), BANK_LOCK, NODE.shared_lock(ACC / ".bank.lock"):
             ctx.sync()
             nn = near(hr, ctx.bank.t)
             if nn > ACC_MAX and not ctx.test:
                 with ctx.lock:
                     ctx.stat["real_rej"] += 1
                 print(f"  {name} попытка {att}: готовый похож ({nn} кадров)", flush=True)
+                part.unlink(missing_ok=True)
                 continue
             ctx.bank.add(hr)
             ACC.mkdir(parents=True, exist_ok=True)
-            np.save(ACC / f"{name}.npy", np.packbits(hr > 0, axis=1))
+            os.replace(part, dest)                         # ролик в папку ДО отпечатка: готовым считается пара
+            NODE.save_atomic(ACC / f"{name}.npy", lambda t: _save_npy(t, np.packbits(hr > 0, axis=1)))
             ctx.loaded.add(f"{name}.npy")
-        shutil.move(str(tmp), str(dest))
-        (keep / "plan.json").write_text(json.dumps({k: v for k, v in pl.items() if not k.startswith("_")},
-                                                   ensure_ascii=False), encoding="utf-8")
-        for f in keep.iterdir():
-            if f.name != "plan.json":
-                f.unlink()
+        pj = json.dumps(dict({k: v for k, v in pl.items() if not k.startswith("_")}, host=NODE.HOST), ensure_ascii=False)
+        (WORK / "plans").mkdir(parents=True, exist_ok=True)
+        (WORK / "plans" / f"{RUN}{tag}_{i:03d}.json").write_text(pj, encoding="utf-8")   # план — в общую папку
+        shutil.rmtree(keep, ignore_errors=True)
         with ctx.lock:
             ctx.done += 1
-        return f"{name} (попытка {att}, похожих кадров {nn})"
+        return f"{name} (попытка {att}, похожих кадров {nn}, {NODE.HOST})"
     if girl == "A" and os.environ.get("MV_FALLBACK_B"):   # окна лица A исчерпаны — этот ролик на девушке B
         return build_one(ctx, tag, i, "B")
     raise RuntimeError(f"{name}: попытки кончились без приёмки")
@@ -994,7 +1016,16 @@ def main() -> int:
     ap.add_argument("--test", type=int, default=0)
     ap.add_argument("--jobs", type=int, default=6)
     ap.add_argument("--part", default="0/1", help="i/n: этот процесс собирает каждый n-й ролик со сдвигом i")
+    ap.add_argument("--run", default="", help="отдельная партия NAME: output/inspoy_moveon_NAME_*, acc_NAME")
+    ap.add_argument("--with-sold", action="store_true", help="с --run: 300 сданных роликов основной партии — тоже в банк")
     a = ap.parse_args()
+    NODE.tee_remote_log(__file__)                          # ноутбук: лог ещё и в общую папку (_node_logs)
+    global ACC, RUN
+    if a.run:
+        ACC = WORK / f"acc_{a.run}"
+        RUN = f"{a.run}_"
+    print(f"машина {NODE.HOST}: видео — {HW.mode()}, torch — {HW.device()}, промежуточные — {JOBS_DIR}"
+          + (" (из общей папки)" if NODE.REMOTE else ""), flush=True)
     t0 = time.time()
     prog("подготовка: шаблоны страниц", 0, None)
     meta = build_templates()
@@ -1014,7 +1045,14 @@ def main() -> int:
     else:
         prog("подготовка: банк прошлых 450", 0, None)
         print(f"прошлых роликов: {load_old(bank)}, кадров в банке {len(bank.t)}", flush=True)
-        out = {"yt": ROOT / "output" / f"inspoy_moveon_1_YT_{a.yt}", "tt": ROOT / "output" / f"inspoy_moveon_1_TT_{a.tt}"}
+        run = a.run or "1"
+        out = {"yt": ROOT / "output" / f"inspoy_moveon_{run}_YT_{a.yt}", "tt": ROOT / "output" / f"inspoy_moveon_{run}_TT_{a.tt}"}
+        if a.run and a.with_sold:                         # сданные ролики основной партии — в банке как прошлые
+            n_acc = 0
+            for f in sorted((WORK / "acc").glob("*.npy")):
+                bank.add(np.unpackbits(np.load(f), axis=1)[:, :256].astype(np.float32) * 2 - 1)
+                n_acc += 1
+            print(f"сданных роликов основной партии в банке: {n_acc}, кадров {len(bank.t)}", flush=True)
         for tag, n in (("yt", a.yt), ("tt", a.tt)):
             jobs += [(tag, k, "AB"[(k - 1) % 2]) for k in range(1, n + 1)]
         # уже готовые (перезапуск) — пропустить; их отпечатки (и соседних процессов) банк берёт из acc/ (ctx.sync)
@@ -1037,22 +1075,55 @@ def main() -> int:
     total = len(jobs)
     errors = []
     last_ec = time.time()
-    with ThreadPoolExecutor(a.jobs) as ex:
-        futs = {ex.submit(build_one, ctx, *j): j for j in jobs}
-        for f in as_completed(futs):
-            j = futs[f]
-            try:
-                msg = f.result()
-                el = time.time() - t0
-                print(f"  [{ctx.done}/{total}] {msg}  {el / 60:.1f} мин, {ctx.done / max(el / 60, 0.01):.1f}/мин  "
-                      f"{ctx.stat}", flush=True)
-            except Exception as e:  # noqa: BLE001
-                errors.append((j, repr(e)))
-                print(f"  ОШИБКА {j}: {e}\n{traceback.format_exc()[-800:]}", flush=True)
-            prog(f"сборка + проверка {ctx.stat}", ctx.done, total)
-            if time.time() - last_ec > 10 and BDEV == "cuda":
-                torch.cuda.empty_cache()
-                last_ec = time.time()
+    # заявки: ролик собирает та машина/процесс, что первой создала <tag>_<i>.claim; ролики соседа пропускаются сразу
+    claims = NODE.Claims(WORK / "claims" / (a.run or ("test" if a.test else "1")))
+    t_build = time.time()
+
+    def claimed(tag: str, i: int, girl: str):
+        key = f"{tag}_{i:03d}"
+        if not claims.take(key):
+            return None
+        try:
+            if not a.test and (out[tag] / f"inspoy_moveon_{tag}_{i:03d}_1.mp4").exists() \
+                    and (ACC / f"inspoy_moveon_{tag}_{i:03d}_1.mp4.npy").exists():
+                claims.done(key)                           # собран раньше (до заявок) — не пересобирать
+                return None
+            msg = build_one(ctx, tag, i, girl)
+            claims.done(key)
+            return msg
+        except BaseException:
+            claims.drop(key)                               # брак/ошибка — ролик снова свободен для любой машины
+            raise
+    left = list(jobs)
+    tries: dict = {}
+    while left:
+        with ThreadPoolExecutor(a.jobs) as ex:
+            futs = {ex.submit(claimed, *j): j for j in left}
+            for f in as_completed(futs):
+                j = futs[f]
+                try:
+                    msg = f.result()
+                    if msg is None:
+                        continue
+                    el = time.time() - t_build
+                    print(f"  [{ctx.done}/{total}] {msg}  {el / 60:.1f} мин, {ctx.done / max(el / 60, 0.01):.1f}/мин "
+                          f"(эта машина)  {ctx.stat}", flush=True)
+                except Exception as e:  # noqa: BLE001
+                    tries[j] = tries.get(j, 0) + 1
+                    if tries[j] >= 2:
+                        errors.append((j, repr(e)))
+                    print(f"  ОШИБКА {j}: {e}\n{traceback.format_exc()[-800:]}", flush=True)
+                prog(f"сборка + проверка {ctx.stat}", ctx.done, total)
+                if time.time() - last_ec > 10:
+                    HW.empty_cache()
+                    last_ec = time.time()
+        # не готово: свободное (сосед бросил или упал) — ещё круг; занятое живой заявкой соседа — ждём его
+        left = [j for j in jobs if not claims.is_done(f"{j[0]}_{j[1]:03d}") and tries.get(j, 0) < 2]
+        if left and all(claims.busy_elsewhere(f"{t}_{k:03d}") for t, k, _ in left):
+            prog(f"жду соседа: {len(left)} роликов собирает другая машина", ctx.done, total)
+            time.sleep(15)
+    n_all = sum(claims.is_done(f"{t}_{k:03d}") for t, k, _ in jobs)
+    print(f"всего готово (все машины): {n_all} из {total}", flush=True)
     prog("готово", ctx.done, total)
     print(f"ГОТОВО: {ctx.done} из {total}, ошибок {len(errors)}, {time.time() - t0:.0f} с, {ctx.stat}", flush=True)
     for e in errors:

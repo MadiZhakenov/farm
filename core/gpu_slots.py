@@ -22,7 +22,11 @@ import subprocess
 import time
 from pathlib import Path
 
-SLOTS = int(os.environ.get("GPU_SLOTS", "8"))
+from core import hw as _hw  # noqa: E402
+from core.farm_node import local_dir as _local_dir  # noqa: E402
+
+_NV = _hw.nvidia()
+SLOTS = int(os.environ.get("GPU_SLOTS", "8" if _NV else "4"))   # ноутбук: 4 сборки сразу (Quick Sync)
 VRAM_MAX_MB = int(os.environ.get("GPU_VRAM_MAX_MB", "5500"))   # + ~1.5 ГБ на сборку из 2560×1440 → потолок ~7.5 из 8
 STAGGER = float(os.environ.get("GPU_STAGGER", "1.5"))   # с между стартами CUDA-ffmpeg (память занимается не сразу)
 _vram = {"t": 0.0, "mb": 0}
@@ -30,6 +34,8 @@ _vram = {"t": 0.0, "mb": 0}
 
 def vram_used_mb() -> int:
     """Занято видеопамяти, МБ (nvidia-smi, кэш 1 с); при ошибке — 0 (не блокируем)."""
+    if not _NV:                                           # без NVIDIA видеопамяти нет — не меряем
+        return 0
     if time.time() - _vram["t"] > 1.0:
         try:
             r = subprocess.run(["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
@@ -41,8 +47,9 @@ def vram_used_mb() -> int:
     return _vram["mb"]
 
 
-DIR = Path(__file__).resolve().parent.parent / "output" / "_work" / "_gpu_slots"
-HW = ["-hwaccel", "cuda"]
+# слоты — свои у каждой машины (ноутбук из общей папки не должен ждать видеокарту ПК)
+DIR = _local_dir(Path(__file__).resolve().parent.parent / "output" / "_work" / "_gpu_slots")
+HW = ["-hwaccel", "cuda"] if _NV else []
 
 
 @contextlib.contextmanager

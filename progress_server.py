@@ -57,6 +57,37 @@ def sampler() -> None:
             g = {k: SYS_HIST[-1][k] for k in ("gpu", "enc", "dec", "vram", "temp")}
         SYS_HIST.append(dict(t=round(time.time(), 1), cpu=psutil.cpu_percent(interval=None),
                              ram=round((vm.total - vm.available) / 2 ** 30, 2)) | g)
+        read_nodes()
+
+
+# ---------------------------------------------------------------- другие машины (ноутбук из общей папки)
+# core/farm_node.start_load_reporter пишет output/_work/_node_load/<МАШИНА>.json раз в 3 с; копим историю тут
+NODE_HIST: dict = {}
+NODE_INFO: dict = {}
+
+
+def read_nodes() -> None:
+    for f in (OUT / "_work" / "_node_load").glob("*.json"):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        host, s = d.get("host") or f.stem, d.get("now") or {}
+        NODE_INFO[host] = {k: v for k, v in d.items() if k != "now"} | dict(seen=s.get("t", 0))
+        h = NODE_HIST.setdefault(host, deque(maxlen=SYS_KEEP))
+        if s.get("t") and (not h or s["t"] > h[-1]["t"]):
+            h.append(s)
+
+
+def nodes() -> list[dict]:
+    """Машины, что писали загрузку последние 10 мин (online — последние 15 с)."""
+    now = time.time()
+    res = []
+    for host, info in sorted(NODE_INFO.items()):
+        if now - info.get("seen", 0) > 600:
+            continue
+        res.append(dict(info, online=now - info.get("seen", 0) < 15, hist=list(NODE_HIST.get(host, []))))
+    return res
 VID = {".mp4", ".mov"}
 IMG = {".jpg", ".jpeg", ".png", ".webp"}
 SKIP = {"_work", "_old"}
@@ -257,8 +288,32 @@ def jobs() -> list[dict]:
         out.append(dict(kind="other", script=f"ffmpeg без сборщика × {len(lone)}", args="запущены из командной строки/цепочек",
                         started=min(q.info["create_time"] for q in lone), cpu=sum(tree_cpu(q.pid) for q in lone),
                         pid=lone[0].pid, dirs=[], done=0, target=None, rate=0, eta_min=None, last=None))
+    out += remote_jobs()
     out.sort(key=lambda x: x["started"])
     return out
+
+
+def remote_jobs() -> list[dict]:
+    """Сборки других машин (ноутбук запускает сборщики из общей папки, core/farm_node.Progress): файлы
+    _qa_progress/<МАШИНА>-<pid>.json, которые обновлялись последние 90 с."""
+    res = []
+    now = time.time()
+    for pf in (ROOT / "output" / "_work" / "_qa_progress").glob("*-*.json"):
+        try:
+            mt = pf.stat().st_mtime
+            if now - mt > 90:
+                continue
+            st = json.loads(pf.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        started = st.get("started") or mt
+        done, total = st.get("done", 0), st.get("total")
+        rate = done / (max(now - started, 1) / 60)
+        res.append(dict(script=f"{st.get('host', '?')}: {st.get('script', '')}", args=st.get("stage", ""),
+                        stage=st.get("stage", ""), started=started, dirs=[], done=done, target=total,
+                        rate=round(rate, 1), eta_min=round(((total or 0) - done) / rate, 1) if rate > 0 and total else None,
+                        last=mt, cpu=0.0, pid=0, host=st.get("host")))
+    return res
 
 
 CPU_PREV: dict = {}
@@ -320,7 +375,7 @@ def status() -> dict:
     ff = sum(1 for p in psutil.process_iter(["name"]) if (p.info["name"] or "").lower().startswith("ffmpeg"))
     cpu = SYS_HIST[-1]["cpu"] if SYS_HIST else 0.0
     return dict(now=time.time(), cpu=cpu, ffmpeg=ff, jobs=js, folders=folders(active),
-                sys=dict(SYS_INFO, every=SYS_EVERY, hist=list(SYS_HIST)))
+                sys=dict(SYS_INFO, every=SYS_EVERY, hist=list(SYS_HIST)), nodes=nodes())
 
 
 class H(BaseHTTPRequestHandler):

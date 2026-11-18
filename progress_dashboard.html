@@ -69,6 +69,7 @@ h2 { font-size: 15px; margin: 22px 0 8px; color: var(--muted); font-weight: 600;
   <h2>Загрузка компьютера</h2>
   <p class="hint">Чем выше синий график — тем сильнее занята эта часть компьютера. Если что-то долго «на пределе», генерации идут медленнее. Наведи на график — покажет время и значение.</p>
   <section id="sys" class="tiles"></section>
+  <div id="nodes"></div>
   <h2>Сейчас идёт</h2>
   <section id="jobs"></section>
   <h2>Папки за сутки</h2>
@@ -88,6 +89,7 @@ async function tick() {
     const r = await fetch("/api/status", {cache: "no-store"});
     const s = await r.json();
     drawSys(s.sys);
+    drawNodes(s.nodes || [], s.now);
     document.getElementById("meta").textContent =
       `обновлено ${new Date(s.now * 1000).toLocaleTimeString("ru-RU")} · CPU ${Math.round(s.cpu)}% · ffmpeg: ${s.ffmpeg}`;
     const J = document.getElementById("jobs");
@@ -141,25 +143,38 @@ function level(p) {                                       // слово + зна
   if (p >= 45) return ["work", "● работает"];
   return ["free", "✓ свободно"];
 }
-let SYS = null;
+// ноутбук (и другие машины из общей папки): процессор, видеоядро (расчёты Arc + Quick Sync), память
+const mx = (...v) => { const f = v.filter(x => x != null); return f.length ? Math.max(...f) : null; };
+const NODE_TILES = [
+  {id: "cpu", title: "Процессор", what: "распаковка, слои, склейка видео",
+   pct: h => h.cpu, show: h => `${Math.round(h.cpu)} %`, det: () => ""},
+  {id: "gpu", title: "Видеоядро", what: "расчёты (Arc) и сборка видео (Quick Sync)",
+   pct: h => mx(h.g3d, h.gcomp, h.vdec, h.venc), show: h => `${Math.round(mx(h.g3d, h.gcomp, h.vdec, h.venc))} %`,
+   det: h => `расчёты ${Math.round(mx(h.g3d, h.gcomp) || 0)} % · Quick Sync ${Math.round(mx(h.vdec, h.venc) || 0)} %`},
+  {id: "ram", title: "Оперативная память", what: "общая с видеоядром",
+   pct: (h, s) => h.ram == null ? null : 100 * h.ram / s.ram_total,
+   show: (h, s) => `${h.ram.toFixed(1)}<small>из ${s.ram_total} ГБ</small>`,
+   det: h => h.gmem != null ? `из них видеоядро ${h.gmem.toFixed(1)} ГБ` : ""},
+];
+const G = {};                                             // группа плиток: ключ → {S, tiles}
 const hover = {};
-function buildTiles() {
-  document.getElementById("sys").innerHTML = TILES.map(t => `<div class="tile" id="t-${t.id}" role="group">
+function buildTiles(box, key, tiles) {
+  box.innerHTML = tiles.map(t => `<div class="tile" id="t-${key}-${t.id}" role="group">
       <div class="top"><span class="ttl">${t.title}</span><span class="st"></span></div>
       <div class="what">${t.what}</div>
       <div class="big">—</div><div class="det"></div>
       <div class="plot"><svg aria-hidden="true"></svg><div class="cross"></div><div class="dot"></div><div class="tip"></div></div>
       <div class="axis"><span>10 мин назад</span><span>5 мин</span><span>сейчас</span></div>
       <div class="sum"></div></div>`).join("");
-  for (const t of TILES) {
-    const plot = document.querySelector(`#t-${t.id} .plot`);
+  for (const t of tiles) {
+    const plot = document.querySelector(`#t-${key}-${t.id} .plot`);
     const move = e => {
       const r = plot.getBoundingClientRect();
       const x = (e.touches ? e.touches[0].clientX : e.clientX) - r.left;
-      hover[t.id] = Math.max(0, Math.min(r.width, x));
-      drawHover(t);
+      hover[`${key}-${t.id}`] = Math.max(0, Math.min(r.width, x));
+      drawHover(t, key);
     };
-    const leave = () => { delete hover[t.id]; drawHover(t); };
+    const leave = () => { delete hover[`${key}-${t.id}`]; drawHover(t, key); };
     plot.addEventListener("mousemove", move);
     plot.addEventListener("touchstart", move, {passive: true});
     plot.addEventListener("touchmove", move, {passive: true});
@@ -167,22 +182,22 @@ function buildTiles() {
     plot.addEventListener("touchend", leave);
   }
 }
-function series(t) {
-  return SYS.hist.map(h => ({t: h.t, h, p: t.pct(h, SYS)})).filter(o => o.p != null && isFinite(o.p));
+function series(t, S) {
+  return S.hist.map(h => ({t: h.t, h, p: t.pct(h, S)})).filter(o => o.p != null && isFinite(o.p));
 }
 function geom(plot, now) {
   const w = plot.clientWidth, h = plot.clientHeight - 14;   // снизу 14 px — подписи времени
   return {w, h, x: tt => w * (1 - (now - tt) / WINDOW), y: p => h * (1 - Math.min(100, Math.max(0, p)) / 100)};
 }
-function drawTile(t) {
-  const now = SYS.now, el = document.getElementById(`t-${t.id}`);
-  const pts = series(t), last = pts[pts.length - 1];
+function drawTile(t, key) {
+  const S = G[key].S, now = S.now, el = document.getElementById(`t-${key}-${t.id}`);
+  const pts = series(t, S), last = pts[pts.length - 1];
   const [cls, word] = level(last ? last.p : null);
   const st = el.querySelector(".st");
   st.className = `st ${cls}`;
   st.textContent = word;
-  el.querySelector(".big").innerHTML = last ? t.show(last.h, SYS) : "—";
-  el.querySelector(".det").textContent = last ? t.det(last.h, SYS) : "";
+  el.querySelector(".big").innerHTML = last ? t.show(last.h, S) : "—";
+  el.querySelector(".det").textContent = last ? t.det(last.h, S) : "";
   const plot = el.querySelector(".plot"), g = geom(plot, now);
   const vis = pts.filter(o => now - o.t <= WINDOW);
   let body = [0, 50, 100].map(v => `<line x1="0" x2="${g.w}" y1="${g.y(v)}" y2="${g.y(v)}" stroke="var(--grid)" stroke-width="1"/>`).join("")
@@ -200,18 +215,20 @@ function drawTile(t) {
     ? `за 10 мин: в среднем ${Math.round(ps.reduce((a, b) => a + b, 0) / ps.length)} %, пик ${Math.round(Math.max(...ps))} %`
     : "копим историю…";
   el.setAttribute("aria-label", `${t.title}: ${el.querySelector(".big").textContent}, ${word}. ${el.querySelector(".sum").textContent}`);
-  drawHover(t);
+  drawHover(t, key);
 }
-function drawHover(t) {
-  const plot = document.querySelector(`#t-${t.id} .plot`);
+function drawHover(t, key) {
+  const plot = document.querySelector(`#t-${key}-${t.id} .plot`);
   const [cross, dot, tip] = ["cross", "dot", "tip"].map(c => plot.querySelector(`.${c}`));
   const hide = () => { cross.style.display = dot.style.display = tip.style.display = "none"; };
-  const pts = SYS ? series(t) : [];
-  if (hover[t.id] == null || !pts.length) return hide();
-  const g = geom(plot, SYS.now);
-  const tt = SYS.now - WINDOW * (1 - hover[t.id] / g.w);
+  const S = G[key] && G[key].S;
+  const pts = S ? series(t, S) : [];
+  const hv = hover[`${key}-${t.id}`];
+  if (hv == null || !pts.length) return hide();
+  const g = geom(plot, S.now);
+  const tt = S.now - WINDOW * (1 - hv / g.w);
   const o = pts.reduce((a, b) => Math.abs(b.t - tt) < Math.abs(a.t - tt) ? b : a);
-  if (SYS.now - o.t > WINDOW || Math.abs(o.t - tt) > 30) return hide();
+  if (S.now - o.t > WINDOW || Math.abs(o.t - tt) > 30) return hide();
   const x = g.x(o.t), y = g.y(o.p);
   cross.style.left = `${x}px`;
   dot.style.left = `${x}px`;
@@ -222,13 +239,33 @@ function drawHover(t) {
   tip.style.top = `${y}px`;
   cross.style.display = dot.style.display = tip.style.display = "block";
 }
+function drawGroup(key) { G[key].tiles.forEach(t => drawTile(t, key)); }
 function drawSys(s) {
   if (!s || !s.hist) return;
-  if (!document.getElementById("t-cpu")) buildTiles();
-  SYS = Object.assign({}, s, {now: s.hist.length ? s.hist[s.hist.length - 1].t : Date.now() / 1000});
-  TILES.forEach(drawTile);
+  if (!document.getElementById("t-pc-cpu")) buildTiles(document.getElementById("sys"), "pc", TILES);
+  G.pc = {tiles: TILES, S: Object.assign({}, s, {now: s.hist.length ? s.hist[s.hist.length - 1].t : Date.now() / 1000})};
+  drawGroup("pc");
 }
-window.addEventListener("resize", () => SYS && TILES.forEach(drawTile));
+function drawNodes(list, now) {
+  const box = document.getElementById("nodes");
+  const keys = list.map(n => "n" + n.host.replace(/[^A-Za-z0-9]/g, "_"));
+  if (box.dataset.keys !== keys.join(",")) {                // состав машин поменялся — пересобрать разметку
+    box.innerHTML = list.map((n, i) => `<h2>Ноутбук · ${esc(n.host)}<span class="pill" id="h-${keys[i]}"></span></h2>
+      <p class="hint">${esc([n.cpu_name, n.gpu_name].filter(Boolean).join(" · "))}</p>
+      <section class="tiles" id="sys-${keys[i]}"></section>`).join("");
+    list.forEach((n, i) => buildTiles(document.getElementById(`sys-${keys[i]}`), keys[i], NODE_TILES));
+    box.dataset.keys = keys.join(",");
+  }
+  list.forEach((n, i) => {
+    const k = keys[i];
+    G[k] = {tiles: NODE_TILES, S: Object.assign({}, n, {now: n.online && n.hist.length ? n.hist[n.hist.length - 1].t : now})};
+    const pill = document.getElementById(`h-${k}`);
+    pill.className = n.online ? "pill live" : "pill";
+    pill.textContent = n.online ? "на связи" : `нет связи ${ago(now, n.seen)}`;
+    drawGroup(k);
+  });
+}
+window.addEventListener("resize", () => Object.keys(G).forEach(drawGroup));
 tick();
 setInterval(tick, 4000);
 </script>
